@@ -20,9 +20,10 @@ import "./Aux.sol";
 
 /**
  * @dev VaultFactory is the contract in charge of deploying new vaults
- * and maintains some global variables, such as the fee charged by the contract owner,
- * the minimum deposit amounts for the vaults, the allowed trading pairs, and the allowed
- * trading paths (thru Uniswap V3) allowed.
+ * and maintains some global variables, such as the fee charged by the contract owner and .
+ * the maximum number of tokens allowed per vault. It also maintains a list of all deployed vaults.
+ * During contract deployment, it deploys the VaultManagerV2 contract, the VaultInfo contract, 
+ * and the AuxInfo contract.
  */
 contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
     uint256 private _feeOwner = 500; //0.5% (units are in millipercent)
@@ -110,7 +111,9 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
 }
 
 /**
- *@dev Vault Manager is in charge of deposits, withdrawals, and trades
+ *@dev Vault Manager is in charge of deposits, withdrawals, and trades for each deployed vault.
+ * During dployment, it deploys the GasStation contract. It relies on the AuxInfo contract to 
+ * maintain a list of allowed tokens, allowed routers.
  */
 contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     using SafeERC20 for IERC20;
@@ -168,7 +171,8 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     function getUseGasStation() external view returns (bool) {
         return useGasStation;
     }
-
+    //set whether the operator must deposit gas into the gas station contract to allow for Autotrading.
+    //If set to false, the protol will pay for Gas.
     function setUseGasStation(bool useGasStationIn) external onlyOwner nonReentrant  {
         useGasStation = useGasStationIn;
     }
@@ -269,7 +273,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         // deltaNFees.owner = (deltaN * feeRateActual.owner)/100_000; //removed to _ownerFeeDest 
         // deltaNFees.operator = (deltaN * feeRateActual.operator)/100_000; //stays in vault
         // deltaNFees.users = (deltaN * feeRateActual.users)/100_000; //stays in vault
-        deltaNFees.owner = Arithmetic.overflowResistantFraction(deltaN, feeRateActual.owner, 100_000);
+        deltaNFees.owner = Arithmetic.overflowResistantFraction(deltaN, feeRateActual.owner, 100_000); //overflow protection
         deltaNFees.operator = Arithmetic.overflowResistantFraction(deltaN, feeRateActual.operator, 100_000);
         deltaNFees.users = Arithmetic.overflowResistantFraction(deltaN, feeRateActual.users, 100_000);
 
@@ -392,7 +396,8 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     }
 }
 
-//This functionality would be in the VaultV2 contract, but the deployment memory contraints prevent it.
+//This functionality would be in the VaultV2 contract, but the deployment memory contraint prevents it.
+//This contract is deployed only once, by the VaultFactoryV2 contract.
 contract VaultInfo {
     VaultFactoryV2 private immutable VF;
     constructor(address vaultFactoryAddress) {
@@ -437,6 +442,8 @@ contract VaultInfo {
     }
 }
 
+//Primary Vault contract. This contract is deployed by the VaultFactoryV2 contract by thew Vault Operator each
+//time a new vault is created.
 contract VaultV2 is Ownable, ReentrancyGuarded {
     using SafeERC20 for IERC20;
 
@@ -470,11 +477,9 @@ contract VaultV2 is Ownable, ReentrancyGuarded {
                 ISharedV2.fees memory feesIn, 
                 bool allowOtherUsersIn) {
         //vault manager will be the owner.
-        //require(functions.isSortedAddresses(tokensIn), "not sortd");
         if (ownerIn != msg.sender) {
             transferOwnership(ownerIn);
         }
-        // transferOwnership(ownerIn);
         operator = operatorIn;
         
         name = nameIn;
@@ -561,7 +566,7 @@ contract VaultV2 is Ownable, ReentrancyGuarded {
         }
         return bal;
     }
-    //every write function is external and onlyOwner. VaultManager in charge of Reentrancy protection.
+
     function increaseAllowance(address token, address spenderAddress, uint256 value) external onlyOwner {
         IERC20(token).safeIncreaseAllowance(spenderAddress, value);
     }

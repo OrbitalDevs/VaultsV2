@@ -2,12 +2,10 @@
 pragma solidity=0.8.16;
 
 import "./reentrancyGuard.sol";
-
-// import "@openzeppelin450/contracts/access/Ownable.sol";
 import "./lib/openzeppelin-contracts@4.5.0/contracts/Ownable.sol";
-// import "@openzeppelin/contracts/math/SafeMath.sol";
-// import "@openzeppelin450/contracts/token/ERC20/utils/SafeERC20.sol";
 
+//This contract is created by the VaultManager and is owned by the VaultManager.
+//It exists to hold the gas that is used by the autoTrade Account.
 contract GasStation is Ownable, ReentrancyGuarded {
     mapping (address => uint256) private gasBalances;
 
