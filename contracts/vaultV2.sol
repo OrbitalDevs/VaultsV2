@@ -20,7 +20,7 @@ import "./Aux.sol";
 
 /**
  * @dev VaultFactory is the contract in charge of deploying new vaults
- * and maintains some global variables, such as the fee charged by the contract owner and .
+ * and maintains some global variables, such as the fee charged by the contract owner and 
  * the maximum number of tokens allowed per vault. It also maintains a list of all deployed vaults.
  * During contract deployment, it deploys the VaultManagerV2 contract, the VaultInfo contract, 
  * and the AuxInfo contract.
@@ -131,6 +131,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     uint256 private gasStationParam = 850_000;
     uint256 private constant gasStationParamMax = 1_000_000;
     uint256 private trade5MinTime = 60*60; //5 trades per hour max
+    uint256 private constant maxInitialDenominator = 2**127;
 
     constructor(address ownerIn, AuxInfo AIIn) {
         transferOwnership(ownerIn);
@@ -195,6 +196,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     }
 
     event Deposit(address vaultAddress, address user, uint256[] amts, uint256 timestamp);
+    //Vault stores user balances as ratio of the total. The vault has a single Denominator, vlt.D(), which is always equal to the sum of the Numerators.
     function deposit(address vaultAddress, uint256[] memory amts) external nonReentrant {
         require(VF.isVaultDeployed(vaultAddress), "invalid");
 
@@ -208,6 +210,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         // require(checkMinDeps(tkns, amts), "min deposit not met");
         
         uint256[] memory balances = vlt.balances();
+        //ensure deposits are in the same ratios as the vault's current balances
         require(functions.ratiosMatch(balances, amts), "ratios don't match");
         
         // address user = msg.sender;
@@ -215,13 +218,15 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         uint256 T = functions.listSum(balances);
         uint256 D = vlt.D();
 
-        if (D == 0) {
+        if (D == 0) { //initial deposit
             uint256 sumDenoms = 0; 
             for (uint256 i = 0; i < tkns.length; i++) {
                 sumDenoms += AI.getAllowedTokenInfo(tkns[i]).initialDenominator;
             }
-            deltaN = sumDenoms; 
-        } else {
+            require(sumDenoms > 0 && sumDenoms <= maxInitialDenominator, "invalid sumDenoms");
+            deltaN = sumDenoms; //initial numerator and denominator are the same, and are greater than any possible balance in the vault.
+                                //this ensures precision in the vault's balances. User Balance = (N*T)/D will have rounding errors always 1 wei or less. 
+        } else { 
             // deltaN = (amt * D)/T;
             deltaN = Arithmetic.overflowResistantFraction(amt, D, T);
         }
@@ -403,7 +408,7 @@ contract VaultInfo {
     constructor(address vaultFactoryAddress) {
         VF = VaultFactoryV2(vaultFactoryAddress);
     }
-
+    //an overview of the vault, for front end use
     function getVaultInfo(address vaultAddress) external view returns (ISharedV2.vaultInfoOut memory) {
         require(VF.isVaultDeployed(vaultAddress), "nt dplyd");
         VaultV2 vlt = VaultV2(vaultAddress);
@@ -421,7 +426,13 @@ contract VaultInfo {
                 vlt.allowOtherUsers(),
                 vlt.getOldestTradeTime());
     }
-
+    //can be used by front end to find correct ratios if desired
+    function getAmtsNeededForDeposit(address vaultAddress, uint256 indexOfReferenceToken, uint256 amtIn) public view returns (uint256 requestCode, uint256[] memory amtsNeeded) {
+        VaultV2 vlt = VaultV2(vaultAddress);
+        require(indexOfReferenceToken < vlt.numTokens(), "invalid index");
+        uint256[] memory balances = vlt.balances();
+        return functions.getAmtsNeededForDeposit(indexOfReferenceToken, amtIn, balances);
+    }
     function getUserBalances(address vaultAddress, address userAddress) external view returns (uint256[] memory bals) {
         require(VF.isVaultDeployed(vaultAddress), "nt dplyd");
         VaultV2 vlt = VaultV2(vaultAddress);

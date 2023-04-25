@@ -3,10 +3,6 @@ pragma solidity=0.8.16;
 
 
 interface ISharedV2 {
-    // struct pair {
-    //     address token0;
-    //     address token1;
-    // }
     struct fees {
         uint256 owner;
         uint256 operator;

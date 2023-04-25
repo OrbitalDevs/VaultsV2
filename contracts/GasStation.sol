@@ -33,6 +33,7 @@ contract GasStation is Ownable, ReentrancyGuarded {
     //called by VaultManager to withdraw gas
     function removeGas(uint256 amount, address payable recipient, address payer) external onlyOwner nonReentrant {
         require(gasBalances[payer] >= amount, "insufficient balance");
+        require(amount > 0, "must be > than 0");
         gasBalances[payer] -= amount;
         (bool sent, ) = recipient.call{value: amount}("");
         require(sent, "Failed to send Ether");

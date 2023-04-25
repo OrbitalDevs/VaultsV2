@@ -24,7 +24,6 @@ library Arithmetic {
             ab1 &= 2**128-1;
             ab0 &= 2**128-1;
         }
-
     }
 
     // I adapted this from Fast Division of Large Integers by Karl Hasselström

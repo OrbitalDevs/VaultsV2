@@ -35,6 +35,7 @@ library functions {
             }
         }
     }
+    //check deposit ratios match
     function ratiosMatch(uint256[] memory sourceRatios, uint256[] memory targetRatios) internal pure returns (bool){
         if (sourceRatios.length != targetRatios.length) {
             return false;
@@ -51,6 +52,7 @@ library functions {
         }
         return true;
     }
+    //get deposit amts which will have the correct ratios, when given an amt of a reference token
     function getAmtsNeededForDeposit(uint256 indexOfReferenceToken, uint256 amtIn, uint256[] memory balances) public pure 
         returns (uint256 requestCode, uint256[] memory amtsNeeded) {
         require(indexOfReferenceToken < balances.length && amtIn > 0, "invalid");
@@ -75,6 +77,7 @@ library functions {
         return (requestCode, amtsNeeded);
     }
 
+    //unpack byte into address array
     function decodeAddresses(bytes memory data) internal pure returns (address[] memory) {
         require(data.length % 20 == 0, "Invalid data length");
 
@@ -94,13 +97,11 @@ library functions {
         return addresses;
     }
 
-    function max(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a > b ? a : b;
-    }
+    // function max(uint256 a, uint256 b) internal pure returns (uint256) {
+    //     return a > b ? a : b;
+    // }
 
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
-    }
-
-        
+    // function min(uint256 a, uint256 b) internal pure returns (uint256) {
+    //     return a < b ? a : b;
+    // }        
 }
