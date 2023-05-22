@@ -208,5 +208,4 @@ contract RouterInfo is Ownable {
         allowedPathsMap[token0][token1].pop();
         _decreasePairPaths(token0, token1);
     }
-
 }

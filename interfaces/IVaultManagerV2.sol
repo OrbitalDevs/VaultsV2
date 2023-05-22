@@ -18,13 +18,22 @@ interface IVaultManagerV2 {
     function getOwnerFeesDest() external view returns (address);
     function setOwnerFeesDest(address newOwnerFeesDest) external;
 
-    event Deposit(address vaultAddress, address user, uint256[] amts, uint256 timestamp);
+    event Deposit(address vaultAddress, address user, uint256[] amts);
     function deposit(address vaultAddress, uint256[] memory amts) external;
 
-    event Withdraw(address vaultAddress, address user, uint256 deltaNFeeOwner, uint256 deltaNFeeOperator, uint256 deltaNFeeUsers, uint256 deltaNCaller);
+    event Withdraw(address vaultAddress, address user, 
+                   uint256[] balancesBefore, 
+                   uint256 deltaN, 
+                   ISharedV2.fees deltaNFees, 
+                   uint256 DBefore);
     function withdraw(address vaultAddress, uint256 percentage) external;
 
-    event Trade(address spendToken, address receiveToken, uint256 spendAmt, uint256 receiveAmt, uint256 timestamp);
+    event Trade(address spendToken, 
+                address receiveToken,
+                uint256 spendTokenTotalBefore, 
+                uint256 receiveTokenTotalBefore, 
+                uint256 spendAmt, 
+                uint256 receiveAmt);
     function trade(address vaultAddress, ISharedV2.tradeInput memory params) external returns (uint256 receiveAmt);
 }
 

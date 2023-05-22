@@ -158,7 +158,7 @@ contract TestIntegration is Test, FoundryRandom {
     }
     function allowToken(ERC20 token,  
                         uint256 maxExpectedAmtFloat) public {
-        uint256 minDepAmt;
+
         uint256 initDenominator;
         initDenominator = tokenSetupParams(token,  
                                             maxExpectedAmtFloat);
@@ -379,7 +379,7 @@ contract TestIntegration is Test, FoundryRandom {
             uint256[] memory newUserBalances = vi.getUserBalances(vaultAddress, thisUser);
             // uint256[] memory balances = vaultInfo.getUserBalances(vaultAddress, thisUser);
             for (uint256 j = 0; j < tokenAddresses.length; j++) {
-                uint transFee = 0; //units in millipercent 
+                // uint transFee = 0; //units in millipercent 
                 uint depAmt = expectRevert ? 0 : depositAmounts[j];
                 
                 uint depAmtMin;
@@ -625,10 +625,10 @@ contract TestIntegration is Test, FoundryRandom {
                     (block.timestamp - oldestTradeTime > trade5MinTime) &&
                     spendtokenBalanceBefore > 0 &&
                     vault.isActive() && 
-                    ((!vault.autotradeActive() && user == vault.operator()) || (vault.autotradeActive() && user == vaultManager.getAutoTrader()));
+                    ((!vault.autotradeActive() && user == vault.operator()) || (user == vaultManager.getAutoTrader()));
 
-        ERC20 st = ERC20(TI.spendToken);
-        ERC20 rt = ERC20(TI.receiveToken);
+        // ERC20 st = ERC20(TI.spendToken);
+        // ERC20 rt = ERC20(TI.receiveToken);
         vm.startPrank(user);
         if (!canTrade){
             // console.log('trading expect revert:', TI.spendAmt, st.symbol(), rt.symbol());
@@ -693,7 +693,7 @@ contract TestIntegration is Test, FoundryRandom {
     }
     function testSystem() public { 
         createRandomVault();
-        uint256 numActions = 500;
+        uint256 numActions = 750;
 
         for (uint action=0; action<numActions; action++) {
             vm.warp(block.timestamp + randomNumber(1, 1000));

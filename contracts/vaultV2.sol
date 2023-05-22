@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity=0.8.16;
 
-// import "@openzeppelin450/contracts/access/Ownable.sol";
-// import "@openzeppelin450/contracts/token/ERC20/utils/SafeERC20.sol";
+
 import "./lib/openzeppelin-contracts@4.5.0/contracts/Ownable.sol";
 import "./lib/openzeppelin-contracts@4.5.0/contracts/SafeERC20.sol";
 import "./lib/gnosis/Arithmetic.sol";
@@ -10,13 +9,13 @@ import "./lib/gnosis/Arithmetic.sol";
 import "../interfaces/IV3SwapRouter.sol";
 import "../interfaces/IUniswapV2Router02.sol";
 import "../interfaces/ISharedV2.sol";
-// import "../interfaces/IVault2.sol";
-// import "../interfaces/IVaultManagerV2.sol";
 
 import "./functions.sol";
 import "./reentrancyGuard.sol";
 import "./GasStation.sol";
 import "./Aux.sol";
+
+
 
 /**
  * @dev VaultFactory is the contract in charge of deploying new vaults
@@ -63,14 +62,14 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
     function getMaxTokensPerVault() external view returns(uint256){
         return maxTokensPerVault;
     }
-    function setMaxTokensPerVault(uint256 maxTokensPerVaultIn) external onlyOwner nonReentrant {
+    function setMaxTokensPerVault(uint256 maxTokensPerVaultIn) external nonReentrant onlyOwner {
         require(maxTokensPerVaultIn >= 2, "> 2");
         maxTokensPerVault = maxTokensPerVaultIn;
     }
     function getFeeOwner() external view returns (uint256) {
         return _feeOwner;
     }
-    function setFeeOwner(uint256 feeOwnerIn) external onlyOwner nonReentrant {
+    function setFeeOwner(uint256 feeOwnerIn) external nonReentrant onlyOwner {
         require(feeOwnerIn <= _feeOwnerMax, "> 1000"); // 1% max
         _feeOwner = feeOwnerIn;
     }
@@ -148,7 +147,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         return _autoTrader;
     }
 
-    function setAutoTrader(address autoTraderIn) external onlyOwner nonReentrant {
+    function setAutoTrader(address autoTraderIn) external nonReentrant onlyOwner {
         _autoTrader = autoTraderIn;
     }
 
@@ -156,7 +155,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         return gasStationParam;
     }
 
-    function setGasStationParam(uint256 gasStationParamIn) external onlyOwner nonReentrant  {
+    function setGasStationParam(uint256 gasStationParamIn) external nonReentrant onlyOwner {
         require(gasStationParamIn <= gasStationParamMax, "too high");
         gasStationParam = gasStationParamIn;
     }
@@ -165,7 +164,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         return trade5MinTime;
     }
 
-    function setTrade5MinTime(uint256 trade5MinTimeIn) external onlyOwner nonReentrant  {
+    function setTrade5MinTime(uint256 trade5MinTimeIn) external nonReentrant onlyOwner {
         trade5MinTime = trade5MinTimeIn;
     }
 
@@ -174,7 +173,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     }
     //set whether the operator must deposit gas into the gas station contract to allow for Autotrading.
     //If set to false, the protol will pay for Gas.
-    function setUseGasStation(bool useGasStationIn) external onlyOwner nonReentrant  {
+    function setUseGasStation(bool useGasStationIn) external nonReentrant onlyOwner {
         useGasStation = useGasStationIn;
     }
 
@@ -190,12 +189,12 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         return _ownerFeesDest;
     }
 
-    function setOwnerFeesDest(address newOwnerFeesDest) external onlyOwner nonReentrant {
+    function setOwnerFeesDest(address newOwnerFeesDest) external nonReentrant onlyOwner {
         require(newOwnerFeesDest != address(0), "zero address");
         _ownerFeesDest = newOwnerFeesDest;
     }
 
-    event Deposit(address vaultAddress, address user, uint256[] amts, uint256 timestamp);
+    event Deposit(address vaultAddress, address user, uint256[] amts);
     //Vault stores user balances as ratio of the total. The vault has a single Denominator, vlt.D(), which is always equal to the sum of the Numerators.
     function deposit(address vaultAddress, uint256[] memory amts) external nonReentrant {
         require(VF.isVaultDeployed(vaultAddress), "invalid");
@@ -241,12 +240,14 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
                 IERC20(tkns[i]).safeTransferFrom(msg.sender, vaultAddress, amts[i]);
             }
         }
-        emit Deposit(vaultAddress, msg.sender, amts, block.timestamp);
+        emit Deposit(vaultAddress, msg.sender, amts);
     }
 
     event Withdraw(address vaultAddress, address user, 
-                   uint256 deltaNFeeOwner, uint256 deltaNFeeOperator, 
-                   uint256 deltaNFeeUsers, uint256 deltaNCaller);
+                   uint256[] balancesBefore, 
+                   uint256 deltaN, 
+                   ISharedV2.fees deltaNFees, 
+                   uint256 DBefore);
     function withdraw(address vaultAddress, uint256 percentage) external nonReentrant {
         require(VF.isVaultDeployed(vaultAddress), "invalid");
         require(percentage > 0 && percentage <= 100, "invalid");
@@ -316,18 +317,20 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
                 IERC20(tkns[i]).safeTransferFrom(vaultAddress, msg.sender, amtsOutCaller[i]);
             }
         }
-        emit Withdraw(vaultAddress, msg.sender, 
-                      deltaNFees.owner, deltaNFees.operator, 
-                      deltaNFees.users, deltaNLeftover);
+        emit Withdraw(vaultAddress, 
+                      msg.sender, 
+                      balances,
+                      deltaN, 
+                      deltaNFees,
+                      D);
     }
 
     event Trade(address spendToken, 
                 address receiveToken,
-                // uint256 spendTokenTotalBefore, 
-                // uint256 receiveTokenTotalBefore, 
+                uint256 spendTokenTotalBefore, 
+                uint256 receiveTokenTotalBefore, 
                 uint256 spendAmt, 
-                uint256 receiveAmt, 
-                uint256 timestamp);
+                uint256 receiveAmt);
 
     function _trade(VaultV2 vlt, ISharedV2.tradeInput memory TI) private returns (uint256 receiveAmt) {
         // VaultFactoryV2.routerInfo memory RI = VF.getRouterInfo(TI.routerAddress);
@@ -372,11 +375,14 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         
         //check for restrictions
         require(vlt.isActive(), "not active");
-        require((!vlt.autotradeActive() && msg.sender == vlt.operator()) || (vlt.autotradeActive() && msg.sender == _autoTrader) , "auto/op");
+        // require((!vlt.autotradeActive() && msg.sender == vlt.operator()) || (vlt.autotradeActive() && msg.sender == _autoTrader) , "auto/op");
+        require((!vlt.autotradeActive() && msg.sender == vlt.operator()) || (msg.sender == _autoTrader) , "auto/op"); //allow autotrade to be called any time, for limit orders
         require(block.timestamp - vlt.getOldestTradeTime() >= trade5MinTime, "too soon");
         
         require(vlt.isTokenAllowed(params.spendToken) && vlt.isTokenAllowed(params.receiveToken), "token not allowed");
-        require(params.spendAmt <= vlt.balance(params.spendToken), "not enough spend token");
+        uint256 balSpendToken = vlt.balance(params.spendToken);
+        uint256 balReceiveToken = vlt.balance(params.receiveToken);
+        require(params.spendAmt <= balSpendToken, "not enough spend token");
 
         //make sure router can spend vault's spend token
         //alternate idea: transfer tokens to this contract, trade, transfer back
@@ -388,7 +394,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
 
         require(receiveAmt >= params.receiveAmtMin, "increase slippage");
 
-        emit Trade(params.spendToken, params.receiveToken, params.spendAmt, receiveAmt, block.timestamp);
+        emit Trade(params.spendToken, params.receiveToken, balSpendToken, balReceiveToken, params.spendAmt, receiveAmt);
 
         if (useGasStation && (msg.sender == _autoTrader) && (_autoTrader != vlt.operator())) { //operator pays gas to _autoTrader for auto trades
             uint256 gasPrice = tx.gasprice;
@@ -547,6 +553,11 @@ contract VaultV2 is Ownable, ReentrancyGuarded {
         isActive = false;
     }
 
+    function setOperator(address operatorIn) external nonReentrant {
+        require(msg.sender == owner() || msg.sender == operator, "only ownop");
+        operator = operatorIn;
+    }
+
     function setAllowOtherUsers(bool allow) external nonReentrant{
         require(msg.sender == operator, "only op");
         allowOtherUsers = allow;
@@ -578,10 +589,10 @@ contract VaultV2 is Ownable, ReentrancyGuarded {
         return bal;
     }
 
-    function increaseAllowance(address token, address spenderAddress, uint256 value) external onlyOwner {
+    function increaseAllowance(address token, address spenderAddress, uint256 value) external nonReentrant onlyOwner {
         IERC20(token).safeIncreaseAllowance(spenderAddress, value);
     }
-    function tradeV2(address routerAddress, uint amountIn, uint amountOutMin, address[] calldata path) external onlyOwner returns (uint256 receiveAmt) {
+    function tradeV2(address routerAddress, uint amountIn, uint amountOutMin, address[] calldata path) external nonReentrant onlyOwner returns (uint256 receiveAmt) {
         shiftLastTradeTimes();
         IUniswapV2Router02 routerV2 = IUniswapV2Router02(routerAddress);
         uint256[] memory recAmts;
@@ -589,7 +600,7 @@ contract VaultV2 is Ownable, ReentrancyGuarded {
         recAmts = routerV2.swapExactTokensForTokens(amountIn, amountOutMin, path, to, block.timestamp);
         receiveAmt = recAmts[recAmts.length - 1];
     }
-    function tradeV3(address routerAddress, IV3SwapRouter.ExactInputParams calldata params) external onlyOwner returns (uint256 receiveAmt) {
+    function tradeV3(address routerAddress, IV3SwapRouter.ExactInputParams calldata params) external nonReentrant onlyOwner returns (uint256 receiveAmt) {
         shiftLastTradeTimes();
         IV3SwapRouter routerV3 = IV3SwapRouter(routerAddress);
         receiveAmt = routerV3.exactInput(params);
