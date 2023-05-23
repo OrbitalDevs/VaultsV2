@@ -5,7 +5,7 @@ import {DSTest} from "ds-test/test.sol";
 import {Utilities} from "./utils/Utilities.sol";
 import {console} from "./utils/Console.sol";
 import {Vm} from "forge-std/Vm.sol";
-import "../Aux.sol";
+import "../Auxil.sol";
 
 contract TestRouterInfo is DSTest {
     RouterInfo routerInfo;

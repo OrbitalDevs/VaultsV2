@@ -7,7 +7,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {Utilities} from "./utils/Utilities.sol";
 import {console} from "./utils/Console.sol";
 
-import "../Aux.sol";
+import "../Auxil.sol";
 
 contract TestAuxInfo is DSTest {
     AuxInfo auxInfo;

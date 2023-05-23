@@ -6,7 +6,7 @@ import {Utilities} from "./utils/Utilities.sol";
 import {console} from "./utils/Console.sol";
 import {Vm} from "forge-std/Vm.sol";
 import "../vaultV2.sol";
-import "../Aux.sol";
+import "../Auxil.sol";
 import "../../interfaces/ISharedV2.sol";
 import "../../interfaces/IV3SwapRouter.sol";
 import {MockERC20} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockERC20.sol";
