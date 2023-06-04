@@ -31,6 +31,7 @@ interface IVaultV2 {
     function setAutotrade(bool status) external;
     function balance(address token) external view returns (uint256);
     function balances() external view returns (uint256[] memory);
+    function totalBalance() external view returns (uint256);
     function increaseAllowance(address token, address spenderAddress, uint256 value) external;
     function tradeV2(address routerAddress, uint amountIn, uint amountOutMin, address[] calldata path) external returns (uint256 receiveAmt);
     function tradeV3(address routerAddress, IV3SwapRouter.ExactInputParams calldata params) external returns (uint256 receiveAmt);

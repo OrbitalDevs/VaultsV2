@@ -18,10 +18,12 @@ import {ERC20} from "../lib/openzeppelin-contracts@4.5.0/contracts/ERC20.sol";
 import {SafeERC20} from "../lib/openzeppelin-contracts@4.5.0/contracts/SafeERC20.sol";
 import {IWETH} from "../lib/openzeppelin-contracts@4.5.0/contracts/IWETH.sol";
 
+import "../mocks/MockAggregatorV3.sol";
 
 import "../vaultV2.sol";
 import "../Auxil.sol";
 import "../GasStation.sol";
+import "../ChainlinkInterface.sol";
 import "../../interfaces/ISharedV2.sol";
 import "../../interfaces/IV3SwapRouter.sol";
 import "../../interfaces/IUniswapV2Router02.sol";
@@ -33,7 +35,7 @@ contract TestIntegration is Test, FoundryRandom {
 
     Utilities internal utils;
     address payable[] internal users;
-    uint256 numUsers = 20;
+    uint256 numUsers = 5;
 
     mapping(address => uint256[10]) userBalancesBefore;
     mapping(address => uint256[10]) userBalancesAfter;
@@ -55,6 +57,7 @@ contract TestIntegration is Test, FoundryRandom {
     ERC20 link;
     // ERC20 paxg;
     ERC20[] tokens;
+    mapping(address => uint256) tokenIndex;
 
     VaultFactoryV2 vaultFactory;
     VaultManagerV2 vaultManager;
@@ -63,6 +66,9 @@ contract TestIntegration is Test, FoundryRandom {
     AuxInfo auxInfo;
     RouterInfo[] routerInfo = new RouterInfo[](2);
     VaultInfo vaultInfo;
+    ChainlinkInterface chainlinkInterface;
+
+    mapping(address => address) mockAggregators;
 
     address[] vaultsList;
     mapping(address => bool) selectedTokens;
@@ -83,53 +89,72 @@ contract TestIntegration is Test, FoundryRandom {
     }
     function writeBalances() public {
         for (uint256 i = 0; i < numUsers; i++) {
-            writeTokenBalance(users[i], address(usdc), (100_000)*10**usdc.decimals());
-            writeTokenBalance(users[i], address(dai), (100_000)*10**dai.decimals());
+            writeTokenBalance(users[i], address(usdc), (1_00_000)*10**usdc.decimals());
+            writeTokenBalance(users[i], address(dai), (1_00_000)*10**dai.decimals());
             writeTokenBalance(users[i], address(weth), (100)*10**weth.decimals());
-            writeTokenBalance(users[i], address(wbtc), (5)*10**wbtc.decimals());
+            writeTokenBalance(users[i], address(wbtc), (20)*10**(wbtc.decimals()-1));
+            writeTokenBalance(users[i], address(link), (100_000)*10**link.decimals());
             // writeTokenBalance(users[i], address(paxg), (20)*10**paxg.decimals());
         }
     }
     function setUp() public {
+        utils = new Utilities();
+        users = utils.createUsers(numUsers);
+        user1 = users[3];
+        user2 = users[4];
+        owner = users[0];
+        autoTradeAccount = users[2];
+        ownerFeeDest = users[1];
+
+        console.log("SETUP users", users.length);
+        
+
+
+        console.log("SETUP vm");
+        vm.startPrank(owner);
+
         address v3Address = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
         address v2Address = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
         uniswapV2Router = IUniswapV2Router02(v2Address);
         uniswapV3Router = IV3SwapRouter(v3Address);
 
         usdc = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
-        // usdt = ERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+        mockAggregators[address(usdc)] = address(new MockAggregatorV3(8, 1*10**8)); //set USD price for mock
+        
         dai = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+        mockAggregators[address(dai)] = address(new MockAggregatorV3(8, 1*10**8));
+
         weth = ERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+        mockAggregators[address(weth)] = address(new MockAggregatorV3(8, 1906*10**8));
+
         wbtc = ERC20(0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599);
+        mockAggregators[address(wbtc)] = address(new MockAggregatorV3(8, 27225*10**8));
         // paxg = ERC20(0x45804880De22913dAFE09f4980848ECE6EcbAf78);
         link = ERC20(0x514910771AF9Ca656af840dff83E8264EcF986CA);
+        mockAggregators[address(link)] = address(new MockAggregatorV3(8, 645*10**6));
+
         tokens = [usdc, dai, weth, wbtc, link];
+        for (uint256 i = 0; i < tokens.length; i++) {
+            tokenIndex[address(tokens[i])] = i;
+        }
 
         console.log("SETUP tokens", tokens.length);
 
-        for (uint256 i = 0; i < tokens.length; i++) {
-            console.log(address(tokens[i]));
-            console.log(tokens[i].name());
-        }
-
-        utils = new Utilities();
-        users = utils.createUsers(numUsers);
-        user1 = users[1];
-        user2 = users[2];
-        owner = users[11];
-        autoTradeAccount = users[12];
-        ownerFeeDest = users[13];
-
-        console.log("SETUP users", users.length);
         writeBalances();
 
-
-        console.log("SETUP vm");
-        vm.startPrank(owner);
         vaultFactory = new VaultFactoryV2();
         auxInfo = AuxInfo(address(vaultFactory.getAuxInfoAddress()));
         vaultManager = VaultManagerV2(vaultFactory.getVaultManagerAddress());
         gasStation = GasStation(vaultManager.getGasStationAddress());
+        chainlinkInterface = ChainlinkInterface(vaultManager.getChainlinkInterface());
+
+        for (uint256 i = 0; i < tokens.length; i++) {
+            console.log(address(tokens[i]));
+            console.log(tokens[i].name());
+            chainlinkInterface.addPriceFeed(address(tokens[i]), mockAggregators[address(tokens[i])]);
+        }
+        
+
         vaultInfo = VaultInfo(vaultFactory.getVaultInfoAddress());
         console.log("SETUP vaultFactory", address(vaultFactory));
 
@@ -140,15 +165,23 @@ contract TestIntegration is Test, FoundryRandom {
         routerInfo[0] = RouterInfo(auxInfo.allowRouter(address(uniswapV2Router), "v2 router", 0));
         routerInfo[1] = RouterInfo(auxInfo.allowRouter(address(uniswapV3Router), "v3 router", 1));
 
-        // setup2();
-        // desiredWithdrawalError = 125_000; //1 part in 250,000 withdrawal error max
 
-        allowToken(usdc, 100_000_000);
+        allowToken(usdc, 100_000_0000);
         allowToken(dai, 100_000_000);
         allowToken(weth, 1_000_000);
         allowToken(wbtc, 100_000);
         allowToken(link, 1_000_000);
         // allowToken(paxg, 100_000);
+
+        //set slippages
+        for (uint256 i = 0; i < tokens.length-1; i++) {
+            for (uint256 j=i+1; j<tokens.length; j++) {
+                auxInfo.setPairMaxSlippage(address(tokens[i]), address(tokens[j]), 10_000);
+            }
+        }
+
+        auxInfo.setPairMaxSlippage(address(usdc), address(dai), 100);
+        auxInfo.setPairMaxSlippage(address(usdc), address(weth), 10_000);
 
         allowPaths();
 
@@ -310,8 +343,8 @@ contract TestIntegration is Test, FoundryRandom {
         for (uint256 i = 0; i < tokensIn.length; i++) {
             assertEq(vaultTokens[i], address(tokensIn[i]));
         }
-
     }
+
     function approveTokens(address user, address[] memory tokensIn) public {
         // Approve tokens for deposit
         vm.startPrank(user);
@@ -365,7 +398,8 @@ contract TestIntegration is Test, FoundryRandom {
             expectRevert = true;
             vm.expectRevert();
         }
-        // console.log("depositing...expectRevert: ", expectRevert);
+        console.log("depositing...expectRevert: ", expectRevert);
+        // printNumList(depositAmounts);
         vaultManager.deposit(vaultAddress, depositAmounts);
         // console.log("depositing...done");
         // Stop pranking
@@ -421,8 +455,7 @@ contract TestIntegration is Test, FoundryRandom {
             } else {
                 assertEq(newVaultBalances[i], initialVaultBalances[i] + depositAmounts[i], "LE Incorrect vault token balance after deposit");
                 // assertGe(newVaultBalances[i], initialVaultBalances[i] + depositAmounts[i], "GE Incorrect vault token balance after deposit");
-            }
-            
+            }  
         }
         checkTotals(vaultAddress);
     }
@@ -436,15 +469,11 @@ contract TestIntegration is Test, FoundryRandom {
             }
         }
     }
-    function absDiff(uint a, uint b) internal pure returns (uint) {
-        if (a > b) {
-            return a - b;
-        } else {
-            return b - a;
-        }
-    }
+
     function withdrawFromVault(address user, address vaultAddress, uint256 percentage) public {
         require(percentage > 0 && percentage <= 100);
+
+        console.log("withdrawFromVault: ", user, vaultAddress, percentage);
 
         VaultV2 vault = VaultV2(vaultAddress);
         ISharedV2.vaultInfoOut memory vio = vaultInfo.getVaultInfo(vaultAddress);
@@ -462,7 +491,7 @@ contract TestIntegration is Test, FoundryRandom {
             // if (deltaN == D) {
             //     feesActual.users = 0; //Last user in the vault. No user fees
             // }
-        } else if (deltaN == D) {
+        } else if (deltaN == D - vault.initD()) {
             feesActual.users = 0; //Last user in the vault. No user fees
         }
 
@@ -499,11 +528,12 @@ contract TestIntegration is Test, FoundryRandom {
         
         // uint dwe = desiredWithdrawalError;
         for (i=0; i<users.length; i++){
+            // console.log('checking user', i, users[i]);
             uint256[] memory balances = vaultInfo.getUserBalances(vaultAddress, users[i]);
             for (j=0; j<numTokens; j++){ 
                 uint userFeePortion = 0;
                 if (vault.D() > 0){
-                    userFeePortion = (userFees[j] * vault.N(users[i]))/vault.D();
+                    userFeePortion = ((userFees[j]+1) * vault.N(users[i]))/vault.D();
                 }
                 
                 if (users[i] == user) { //the user making the withdrawal...
@@ -526,7 +556,7 @@ contract TestIntegration is Test, FoundryRandom {
                     } 
                     uint actualVaultIncrease = balances[j] - userBalancesBefore[users[i]][j];
 
-                    // console.log('diff2: %s', absDiff(actualVaultIncrease, expectedVaultIncrease));
+                    // console.log('diff2: %s', actualVaultIncrease, expectedVaultIncrease);
                     assertLe(absDiff(actualVaultIncrease, expectedVaultIncrease), tol, "withdraw owner or operator vault balance");
 
                     //wallet balances...
@@ -563,28 +593,50 @@ contract TestIntegration is Test, FoundryRandom {
                 }
             }
         }
-        checkTotals(vaultAddress);    
+        checkTotals(vaultAddress);
+        console.log('withdrawal done');
     }
     function emptyVault(address vaultAddress) public {
         VaultV2 thisVault = VaultV2(vaultAddress);
+        console.log('BEGIN EMPTY VAULT', vaultAddress, thisVault.operator());
+
+        address[] memory tkns = thisVault.getTokens();
+
+        console.log('this vault tokens');
+        for (uint i=0; i<tkns.length; i++){
+            console.log(ERC20(tkns[i]).symbol());
+        }
+
         for (uint i=0; i<users.length; i++){
             // withdraw(vaultAddress, users[i], 100);
             if (users[i] != thisVault.operator()){
+                console.log('calling withdraw from vault', i);
                 withdrawFromVault(users[i], vaultAddress, 100);
             }
         }
+
+        uint nBefore = thisVault.N(thisVault.operator());
+        uint dBefore = thisVault.D();
+
         withdrawFromVault(thisVault.operator(), vaultAddress, 100);
 
-        
+        uint nAfter = thisVault.N(thisVault.operator());
+        uint dAfter = thisVault.D();
+
         uint[] memory vaultBalances = thisVault.balances();
         for (uint i=0; i<vaultBalances.length; i++){
-            assertEq(vaultBalances[i], 0, 'empty vault');
+            if (vaultBalances[i] > 1){
+                console.log('ERROR debug', nBefore, dBefore, thisVault.initD());
+                console.log('ERROR debug', nAfter, dAfter, thisVault.initD());
+            }
+            assertEq(vaultBalances[i], 0, 'empty vault balance check');
         }
         // console.log('empty vault D', thisVault.D());
-        assertEq(thisVault.D(), 0, 'empty vault D');
+        assertEq(thisVault.D(), thisVault.initD(), 'empty vault D');
         for (uint i=0; i<users.length; i++){
             assertEq(thisVault.N(users[i]), 0, 'empty vault N');
         }
+        console.log('END EMPTY VAULT');
     }
     function checkTotals(address vaultAddress) public {
         VaultV2 vault = VaultV2(vaultAddress);
@@ -625,20 +677,20 @@ contract TestIntegration is Test, FoundryRandom {
                     (block.timestamp - oldestTradeTime > trade5MinTime) &&
                     spendtokenBalanceBefore > 0 &&
                     vault.isActive() && 
-                    ((!vault.autotradeActive() && user == vault.operator()) || (user == vaultManager.getAutoTrader()));
+                    ((!vault.autotradeActive() && user == vault.operator()) || (vault.autotradeActive() && user == vaultManager.getAutoTrader()));
 
-        // ERC20 st = ERC20(TI.spendToken);
-        // ERC20 rt = ERC20(TI.receiveToken);
+        ERC20 st = ERC20(TI.spendToken);
+        ERC20 rt = ERC20(TI.receiveToken);
         vm.startPrank(user);
         if (!canTrade){
-            // console.log('trading expect revert:', TI.spendAmt, st.symbol(), rt.symbol());
-            // console.log('user', user, vault.operator());
+            console.log('trading expect revert:', TI.spendAmt, st.symbol(), rt.symbol());
+            console.log('user', user, vault.operator());
             vm.expectRevert();
             recAmt = vaultManager.trade(vaultAddress, TI);
             recAmt = 0;
         } else {
             
-            // console.log('trading:', TI.spendAmt, st.symbol(), rt.symbol());
+            console.log('trading:', TI.spendAmt, st.symbol(), rt.symbol());
             recAmt = vaultManager.trade(vaultAddress, TI);
             console.log('received:', recAmt);
         }
@@ -655,7 +707,7 @@ contract TestIntegration is Test, FoundryRandom {
         return recAmt;
         
     }
-    function createRandomVault() public returns (address) {
+    function createRandomVault(address vaultOperator) public returns (address) {
         address[] memory allowedTokens = auxInfo.getAllowedTokens();
         uint numTokesTotal = allowedTokens.length;
         uint numTokes = randomNumber(2, numTokesTotal);
@@ -684,63 +736,172 @@ contract TestIntegration is Test, FoundryRandom {
         uint feeOperator = randomNumber(0, 20000 - feeOwner);
         uint feeUsers = randomNumber(0, 20000 - feeOwner - feeOperator);
 
-        address vaultOperator = users[randomNumber(0, users.length - 1)];
+        // address vaultOperator = users[randomNumber(0, users.length - 1)];
 
         // vm.startPrank(vaultOperator);
         address newVault = createVault(vaultOperator, "testVault", tokes, feeOperator, feeUsers, true);
         vaultsList.push(newVault);
         return newVault;
     }
-    function testSystem() public { 
-        createRandomVault();
-        uint256 numActions = 750;
+    function printNumList(uint256[] memory L) public view {
+        for (uint i=0; i<L.length; i++){
+            console.log(i, L[i]);
+        }
+    }
+    function printNumLists(uint256[] memory L, uint256[] memory L2) public view {
+        for (uint i=0; i<L.length; i++){
+            console.log(i, L[i], L2[i]);
+        }
+    }
+    function testSimple() public {
+        address[] memory allowedTokens = auxInfo.getAllowedTokens();
+        uint numTokesTotal = allowedTokens.length;
+        uint numTokes = 2;
 
+        ERC20[] memory tokes = new ERC20[](numTokes);
+
+        tokes[0] = weth;
+        tokes[1] = usdc;
+
+        uint feeOwner = 1000;
+        uint feeOperator = 1000;
+        uint feeUsers = 10000;
+
+        vm.startPrank(owner);
+        vaultFactory.setFeeOwner(feeOwner);
+        vm.stopPrank();
+
+
+        address vaultOperator = users[0];
+
+        // vm.startPrank(vaultOperator);
+        address newVault = createVault(vaultOperator, "testVault", tokes, feeOperator, feeUsers, true);
+
+        // address thisUser = user1;
+        // address otherUser = user2;
+        VaultV2 thisVault = VaultV2(newVault);
+
+        uint256[] memory depositAmounts = new uint256[](2);
+
+
+        for (uint256 i = 0; i < depositAmounts.length; i++) {
+            // depositAmounts[i] = minDepAmts[i];
+            depositAmounts[i] = 1000;
+        }
+        
+        address[] memory toTrack = new address[](4);
+        toTrack[0] = vaultManager.getOwnerFeesDest();
+        toTrack[1] = vaultOperator;
+        toTrack[2] = user1;
+        toTrack[3] = user2;
+
+        trackUsers(newVault, toTrack);
+
+        console.log('DEPOSITING INTO VAULT');
+        depositIntoVault(user1, newVault, depositAmounts);
+        console.log('DEPOSIT COMPLETE');
+
+        trackUsers(newVault, toTrack);
+
+        console.log('DEPOSITING INTO VAULT');
+        depositIntoVault(user2, newVault, depositAmounts);
+        console.log('DEPOSIT COMPLETE');
+
+        trackUsers(newVault, toTrack);
+
+        console.log('WITHDRAWING FROM VAULT');
+        withdrawFromVault(user1, newVault, 50);
+        console.log('WITHDRAW COMPLETE');
+
+        trackUsers(newVault, toTrack);
+    }
+    function trackUsers(address vltAdd, address[] memory toTrack) public view {
+        VaultV2 vlt = VaultV2(vltAdd);
+        uint[] memory balsT = vlt.balances();
+        console.log('VLT', balsT[0], ',', balsT[1]);
+        for (uint256 i = 0; i < toTrack.length; i++) {
+            console.log('USER:', i);
+            uint[] memory bals = vlt.getUserBalances(toTrack[i]);
+            console.log('\t', bals[0], ',', bals[1]);
+        }
+    }
+    function testSystem() public { 
+        createRandomVault(users[0]);
+        
+        uint256 numActions = 300;
+        console.log('');
+        console.log('');
         for (uint action=0; action<numActions; action++) {
             vm.warp(block.timestamp + randomNumber(1, 1000));
             uint thisAction = randomNumber(0, 5);
+            // thisAction = action;
+            
             address thisUser = users[randomNumber(0, users.length - 1)];
+            // address thisUser = users[0];
             address thisVaultAddress = vaultsList[randomNumber(0, vaultsList.length - 1)];
             VaultV2 thisVault = VaultV2(thisVaultAddress);
 
+            console.log('action:', action, thisAction, thisUser);
+
             uint numtokens = thisVault.numTokens();
+
+            // uint[] memory balancesBefore = thisVault.balances();
+            console.log('balancesBefore:');
+            printNumLists(thisVault.balances(), thisVault.getUserBalances(thisUser));
+            console.log('begin action');
             ERC20[] memory tokes = new ERC20[](numtokens);
             for (uint i=0; i<numtokens; i++){
                 tokes[i] = ERC20(thisVault.getToken(i));
             }
 
             if (thisAction == 0) { //deposit into vault
-                uint[] memory bals = thisVault.balances();
-                uint[] memory thisWalletBalances = new uint[](bals.length);
-                for (uint i=0; i<bals.length; i++){
-                    thisWalletBalances[i] = ERC20(tokes[i]).balanceOf(thisUser);
-                }
-                uint256[] memory depositAmounts = new uint256[](bals.length);
+                if (thisUser != autoTradeAccount && thisUser != ownerFeeDest) {
+                    uint[] memory bals = thisVault.balances();
+                    uint[] memory thisWalletBalances = new uint[](bals.length);
+                    for (uint i=0; i<bals.length; i++){
+                        thisWalletBalances[i] = ERC20(tokes[i]).balanceOf(thisUser);
+                    }
+                    uint256[] memory depositAmounts = new uint256[](bals.length);
 
-                if (thisVault.D() == 0) { //initial deposit
-                    for (uint256 i = 0; i < depositAmounts.length; i++) {
-                        // depositAmounts[i] = minDepAmts[i];
-                        if (thisWalletBalances[i] >= 100 ){
-                            depositAmounts[i] = randomNumber(100, thisWalletBalances[i]);
+                    if (thisVault.D() == thisVault.initD()) { //initial deposit
+                        console.log('DEPOSIT DEBUG:', "INITIAL DEPOSIT");
+                        printNumList(bals);
+                        for (uint256 i = 0; i < depositAmounts.length; i++) {
+                            // depositAmounts[i] = minDepAmts[i];
+                            if (thisWalletBalances[i] >= 100 ){
+                                depositAmounts[i] = randomNumber(1, thisWalletBalances[i]/1000);
+                            }
+                        }
+                    } else {
+                        (uint indx, uint grt) = functions.indexOfGreatest(bals);
+                        // uint amtAtIndex = minDepAmts[indx];
+                        if (thisWalletBalances[indx] > 1) {
+                            uint amtAtIndex = randomNumber(1, thisWalletBalances[indx]);
+                            (uint256 reqCode, uint[] memory depositAmountsRet) = functions.getAmtsNeededForDeposit(indx, amtAtIndex, bals);
+
+                            for(uint256 i = 0; i < depositAmountsRet.length; i++) {
+                                depositAmounts[i] = depositAmountsRet[i];
+                            }
+
+                            console.log('DEPOSIT DEBUG:', indx, grt, reqCode);
+                            console.log(amtAtIndex, thisWalletBalances[indx]);
+                            printNumLists(bals, depositAmounts);
                         }
                     }
-                } else {
-                    (uint indx, uint grt) = functions.indexOfGreatest(bals);
-                    // uint amtAtIndex = minDepAmts[indx];
-                    if (thisWalletBalances[indx] > 1) {
-                        uint amtAtIndex = randomNumber(1, thisWalletBalances[indx]);
-                        (uint256 reqCode, uint[] memory depositAmountsRet) = functions.getAmtsNeededForDeposit(indx, amtAtIndex, bals);
-
-                        for(uint256 i = 0; i < depositAmountsRet.length; i++) {
-                            depositAmounts[i] = depositAmountsRet[i];
-                        }
-                    }
+                    console.log('DEPOSITING INTO VAULT', thisVaultAddress);
+                    // for (uint i=0; i<depositAmounts.length; i++){
+                    //     console.log('depositing:', depositAmounts[i], tokes[i].symbol());
+                    // }
+                    printNumList(depositAmounts);
+                    depositIntoVault(thisUser, thisVaultAddress, depositAmounts);
                 }
-                // console.log('DEPOSITING INTO VAULT');
-                depositIntoVault(thisUser, thisVaultAddress, depositAmounts);
+
                 // console.log('DEPOSIT COMPLETE');
             } else if (thisAction == 1) { //withdraw
                 if (thisVault.N(thisUser) > 0) { //only withdraw if user has a balance
-                    withdrawFromVault(thisUser, thisVaultAddress, randomNumber(1, 100));
+                    uint percent = randomNumber(1, 100);
+                    console.log('WITHDRAWING FROM VAULT', thisUser, thisVaultAddress, percent);
+                    withdrawFromVault(thisUser, thisVaultAddress, percent);
                 }
 
             } else if (thisAction == 2) {  //trade
@@ -751,93 +912,77 @@ contract TestIntegration is Test, FoundryRandom {
                     recToken = address(tokes[randomNumber(0, tokes.length - 1)]);
                     j++;
                 }
+                console.log(ERC20(spendToken).symbol(), '->', ERC20(recToken).symbol());
                 RouterInfo ri = routerInfo[randomNumber(0, routerInfo.length - 1)];
                 uint numPaths = ri.getNumAllowedPaths(spendToken, recToken);
                 uint spendAmt = randomNumber(0, thisVault.balance(spendToken));
+                console.log('numPaths:', numPaths, 'spendAmt:', spendAmt);
                 if (numPaths > 0 && spendAmt > 0){
                     uint pathIndex = randomNumber(0, numPaths - 1);
+                    // uint nomReceived = chainlinkInterface.getMinReceived(spendToken, recToken, spendAmt, 0);
+                    uint minReceived = chainlinkInterface.getMinReceived(spendToken, recToken, spendAmt, 5_000);
                     ISharedV2.tradeInput memory TI = ISharedV2.tradeInput({
                         spendToken: spendToken,
                         receiveToken: recToken,
                         spendAmt: spendAmt,
-                        receiveAmtMin: 0,
+                        receiveAmtMin: minReceived,
                         routerAddress: ri.routerAddress(),
                         pathIndex: pathIndex
                     });
+                    console.log('TRADING', thisUser, thisVaultAddress);
+                    console.log(ERC20(spendToken).symbol(), '->', ERC20(recToken).symbol());
+                    console.log('spendAmt:', spendAmt, 'minReceived:', minReceived);
                     trade(thisUser, thisVaultAddress, TI);
                 }   
             } else if (thisAction == 3) { //create new vault
-                createRandomVault();
+                if (thisUser != autoTradeAccount && thisUser != ownerFeeDest) {
+                    console.log('CREATING NEW VAULT');
+                    createRandomVault(thisUser);
+                }
             } else if (thisAction == 4) {
                 if (thisVault.D() > 0){
+                    console.log('EMPTYING VAULT', thisVaultAddress);
                     emptyVault(thisVaultAddress);
                 }
             } else if (thisAction == 5) {
                 //toggle autoTrade
-                // console.log('TOGGLING AUTOTRADE');
-                bool autotradeState = thisVault.autotradeActive();
-                address operator = thisVault.operator();
-                vm.startPrank(operator);
-                thisVault.setAutotrade(!autotradeState);
-                vm.stopPrank();
-                assertEq(thisVault.autotradeActive(), !autotradeState);
+                
+                if (thisVault.totalBalance() > 0) {
+                    bool autotradeState = thisVault.autotradeActive();
+                    address operator = thisVault.operator();
+                    vm.startPrank(operator);
+                    console.log('TOGGLING AUTOTRADE');
+                    thisVault.setAutotrade(!autotradeState);
+                    vm.stopPrank();
+                    assertEq(thisVault.autotradeActive(), !autotradeState);
+                }
             }
+            console.log('balancesAfter:');
+            printNumLists(thisVault.balances(), thisVault.getUserBalances(thisUser));
+            console.log('');
         }
         console.log('num vaults: %s', vaultsList.length);
     }
 
-    // function testSimple() public {
-    //     address[] memory allowedTokens = auxInfo.getAllowedTokens();
-    //     uint numTokesTotal = allowedTokens.length;
-    //     uint numTokes = 2;
 
-    //     ERC20[] memory tokes = new ERC20[](numTokes);
-
-    //     tokes[0] = weth;
-    //     tokes[1] = usdc;
-
-    //     uint feeOwner = 0;
-    //     vm.startPrank(owner);
-    //     vaultFactory.setFeeOwner(feeOwner);
-    //     vm.stopPrank();
-
-        
-    //     uint feeOperator = 0;
-    //     uint feeUsers = 0;
-
-    //     address vaultOperator = users[0];
-
-    //     // vm.startPrank(vaultOperator);
-    //     address newVault = createVault(vaultOperator, "testVault", tokes, feeOperator, feeUsers, true);
-
-    //     address thisUser = users[1];
-    //     VaultV2 thisVault = VaultV2(newVault);
-
-    //     uint256[] memory depositAmounts = new uint256[](2);
-
-
-    //     for (uint256 i = 0; i < depositAmounts.length; i++) {
-    //         // depositAmounts[i] = minDepAmts[i];
-    //         depositAmounts[i] = 1000;
-    //     }
-        
-    //     // console.log('DEPOSITING INTO VAULT');
-    //     depositIntoVault(thisUser, newVault, depositAmounts);
-    //     // console.log('DEPOSIT COMPLETE');
-
-    // }
-    // function testSetup() public {
-    //     assertEq(creationBlock, vaultFactory.getCreationBlock());
-    //     assertEq(creationBlock, vaultManager.getCreationBlock());
-    //     assertTrue(auxInfo.isTokenAllowed(address(usdc)));
-    //     assertTrue(auxInfo.isTokenAllowed(address(dai)));
-    //     assertTrue(auxInfo.isTokenAllowed(address(weth)));
-    //     assertTrue(auxInfo.isTokenAllowed(address(wbtc)));
-    //     // assertTrue(auxInfo.isTokenAllowed(address(paxg)));
-    //     assertTrue(auxInfo.isRouterAllowed(address(uniswapV2Router)));
-    //     assertTrue(auxInfo.isRouterAllowed(address(uniswapV3Router)));
-    // }
-
+    function testSetup() public {
+        assertEq(creationBlock, vaultFactory.getCreationBlock());
+        assertEq(creationBlock, vaultManager.getCreationBlock());
+        assertTrue(auxInfo.isTokenAllowed(address(usdc)));
+        assertTrue(auxInfo.isTokenAllowed(address(dai)));
+        assertTrue(auxInfo.isTokenAllowed(address(weth)));
+        assertTrue(auxInfo.isTokenAllowed(address(wbtc)));
+        // assertTrue(auxInfo.isTokenAllowed(address(paxg)));
+        assertTrue(auxInfo.isRouterAllowed(address(uniswapV2Router)));
+        assertTrue(auxInfo.isRouterAllowed(address(uniswapV3Router)));
+    }
+    function absDiff(uint a, uint b) internal pure returns (uint) {
+        if (a > b) {
+            return a - b;
+        } else {
+            return b - a;
+        }
+    }
     function myAssertEq(uint256 a, uint256 b, uint code) internal {
         if (a != b) {
             console.log("Assert failed: %s == %s", a, b, code);

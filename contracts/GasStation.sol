@@ -10,7 +10,7 @@ contract GasStation is Ownable, ReentrancyGuarded {
     mapping (address => uint256) private gasBalances;
 
     constructor() {
-        transferOwnership(msg.sender);
+        // transferOwnership(msg.sender);
     }
 
     function balanceOf(address account) external view returns (uint256) {

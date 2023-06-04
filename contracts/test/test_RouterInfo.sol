@@ -30,14 +30,14 @@ contract TestRouterInfo is DSTest {
         user1 = users[1];
         user2 = users[2];
         owner = users[11];
-        // vm.prank(owner);
+        vm.prank(owner);
         routerInfo = new RouterInfo(owner, name, routerAddress, routerType);
     }
 
     function testTransferOwnership() public {
         vm.prank(owner);
         routerInfo.transferOwnership(user1);
-        vm.stopPrank();
+        // vm.stopPrank();
         assertEq(routerInfo.owner(), user1);
     }
 
@@ -45,7 +45,7 @@ contract TestRouterInfo is DSTest {
         vm.prank(user1);
         vm.expectRevert();
         routerInfo.transferOwnership(user2);
-        vm.stopPrank();
+        // vm.stopPrank();
     }
 
     function testGetName() public {
@@ -78,7 +78,7 @@ contract TestRouterInfo is DSTest {
 
         vm.prank(owner);
         routerInfo.allowPath(token0, token1, path);
-        vm.stopPrank();
+        // vm.stopPrank();
 
         bytes memory contractPath = routerInfo.getAllowedPath(token0, token1, 0);
         assertEq0(contractPath, path);
@@ -95,17 +95,60 @@ contract TestRouterInfo is DSTest {
         vm.prank(user1);
         vm.expectRevert();
         routerInfo.allowPath(token0, token1, path);
-        vm.stopPrank();
+        // vm.stopPrank();
     }
     function testDisallowPath() public {
         address token0 = address(0x1);
         address token1 = address(0x2);
+        address token2 = address(0x3);
         bytes memory path = hex"010203";
         uint256 pathIndex = 0;
 
-        vm.prank(owner);
+        vm.startPrank(owner);
         routerInfo.allowPath(token0, token1, path);
-        vm.prank(owner);
+        routerInfo.allowPath(token0, token2, path);
+        routerInfo.allowPath(token1, token2, path);
+
+        uint256 numPathsAllowed = routerInfo.getNumAllowedPaths(token0, token1);
+        assertEq(numPathsAllowed, 1);
+
+        uint256 numAllowedPairs = routerInfo.getNumAllowedPairs();
+        assertEq(numAllowedPairs, 3);
+        for (uint256 i = 0; i < numAllowedPairs; i++) {
+            RouterInfo.pair memory allowedPair = routerInfo.getAllowedPair(i);
+            uint listPost = routerInfo.allowedPairListPosition(allowedPair.token0, allowedPair.token1);
+            // assertEq(allowedPair.token0, token0);
+            // assertEq(allowedPair.token1, token2);
+            console.log("allowedPair.path: %s", allowedPair.token0, allowedPair.token1, listPost);
+        }
+        console.log('');
+
+        routerInfo.disallowPath(token0, token1, pathIndex);
+        // vm.stopPrank();
+
+        numAllowedPairs = routerInfo.getNumAllowedPairs();
+        assertEq(numAllowedPairs, 2);
+        for (uint256 i = 0; i < numAllowedPairs; i++) {
+            RouterInfo.pair memory allowedPair = routerInfo.getAllowedPair(i);
+            uint listPost = routerInfo.allowedPairListPosition(allowedPair.token0, allowedPair.token1);
+            // assertEq(allowedPair.token0, token0);
+            // assertEq(allowedPair.token1, token2);
+            console.log("allowedPair.path: %s", allowedPair.token0, allowedPair.token1, listPost);
+        }
+        console.log('');
+
+        routerInfo.allowPath(token0, token1, path);
+        numAllowedPairs = routerInfo.getNumAllowedPairs();
+        assertEq(numAllowedPairs, 3);
+        for (uint256 i = 0; i < numAllowedPairs; i++) {
+            RouterInfo.pair memory allowedPair = routerInfo.getAllowedPair(i);
+            uint listPost = routerInfo.allowedPairListPosition(allowedPair.token0, allowedPair.token1);
+            // assertEq(allowedPair.token0, token0);
+            // assertEq(allowedPair.token1, token2);
+            console.log("allowedPair.path: %s", allowedPair.token0, allowedPair.token1, listPost);
+        }
+        console.log('');
+
         routerInfo.disallowPath(token0, token1, pathIndex);
         vm.stopPrank();
 
@@ -120,13 +163,13 @@ contract TestRouterInfo is DSTest {
         bytes memory path = abi.encodePacked(token0, token1);
         vm.prank(owner);
         routerInfo.allowPath(token0, token1, path);
-        vm.stopPrank();
+        // vm.stopPrank();
 
         // Then, try to disallow the path as a non-owner
         vm.prank(user1);
         vm.expectRevert();
         routerInfo.disallowPath(token0, token1, 0);
-        vm.stopPrank();
+        // vm.stopPrank();
     }
 
 

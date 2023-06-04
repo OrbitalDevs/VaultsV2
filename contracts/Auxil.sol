@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity=0.8.16;
 
-// import "../interfaces/IRouter.sol";
-// import "@openzeppelin450/contracts/access/Ownable.sol";
+
 import "./lib/openzeppelin-contracts@4.5.0/contracts/Ownable.sol";
+import "./functions.sol";
 
 contract AuxInfo is Ownable {
     struct routerInfo {
@@ -18,14 +18,28 @@ contract AuxInfo is Ownable {
         uint256 initialDenominator;
     }
 
+    bool public routersLocked = false;
+
     mapping(address => tokenInfo) public allowedTokensMap;
     address[] public allowedTokensList; 
 
     mapping(address => routerInfo) private allowedRoutersMap; //returns address of RouterInfo Object
     address[] private allowedRoutersList;
 
+    mapping(address => mapping(address => uint256)) private pairMaxSlippageMap; //returns max slippage in millipercent
+
     constructor(address ownerIn) {
         transferOwnership(ownerIn);
+    }
+
+    function getPairMaxSlippage(address tokenAIn, address tokenBIn) external view returns (uint256) {
+        (address tokenA, address tokenB) = functions.sorted(tokenAIn, tokenBIn);
+        return pairMaxSlippageMap[tokenA][tokenB];
+    }
+
+    function setPairMaxSlippage(address tokenAIn, address tokenBIn, uint256 maxSlippageMillipercent) external onlyOwner {
+        (address tokenA, address tokenB) = functions.sorted(tokenAIn, tokenBIn);
+        pairMaxSlippageMap[tokenA][tokenB] = maxSlippageMillipercent;
     }
 
     //Allowed Tokens Section
@@ -87,8 +101,12 @@ contract AuxInfo is Ownable {
     function isRouterAllowed(address routerAddress) external view returns (bool) {
         return allowedRoutersMap[routerAddress].allowed;
     }
+    function lockRouters() external onlyOwner {
+        routersLocked = true;
+    }
     function allowRouter(address routerAddress, string calldata nameIn, uint256 routerType) external onlyOwner 
         returns (address routerInfoContractAddress){
+        require(!routersLocked, "routers locked");
         require(!allowedRoutersMap[routerAddress].allowed, "router allowed");
         require(routerType == 0 || routerType == 1, "must be 0 or 1");
         allowedRoutersList.push(routerAddress);
@@ -99,8 +117,7 @@ contract AuxInfo is Ownable {
                                                 allowedRoutersList.length - 1,  
                                                 address(ri));
         
-        return address(ri);
-        
+        return address(ri);   
     }
     function disallowRouter(address routerAddress) external onlyOwner {
         routerInfo memory info = allowedRoutersMap[routerAddress];
@@ -111,6 +128,7 @@ contract AuxInfo is Ownable {
         allowedRoutersMap[lastRouter].listPosition = info.listPosition;
         allowedRoutersList.pop();
         delete allowedRoutersMap[routerAddress];
+        // allowedRoutersMap[routerAddress].allowed = false;
     }
 }
 
@@ -168,6 +186,10 @@ contract RouterInfo is Ownable {
         return allowedPairsMap[token0][token1].allowed;
     }
 
+    function allowedPairListPosition(address token0, address token1) external view returns (uint256){
+        return allowedPairsMap[token0][token1].listPosition;
+    }
+
     //allowed paths for each pair
     function getNumAllowedPaths(address token0, address token1) external view returns (uint256){
         return allowedPathsMap[token0][token1].length;
@@ -191,9 +213,11 @@ contract RouterInfo is Ownable {
         require(LI.allowed, "RouterInfo: pair not allowed");
         allowedPairsList[LI.listPosition].numPathsAllowed--;
         if (allowedPairsList[LI.listPosition].numPathsAllowed == 0){
+            pair memory lastPair = allowedPairsList[allowedPairsList.length - 1];  //need to grab last pair first!
             allowedPairsList[LI.listPosition] = allowedPairsList[allowedPairsList.length - 1];
             allowedPairsList.pop();
             LI.allowed = false;
+            allowedPairsMap[lastPair.token0][lastPair.token1].listPosition = LI.listPosition;   /////reset list position of what was the last element of the list.
         }
     }
     //Does not check if path already allowed. Owner must be smart.
@@ -203,8 +227,9 @@ contract RouterInfo is Ownable {
     }
 
     function disallowPath(address token0, address token1, uint256 pathIndex) external onlyOwner {
-        require(allowedPathsMap[token0][token1].length > pathIndex, "RouterInfo: pathIndex out of bounds");
-        allowedPathsMap[token0][token1][pathIndex] = allowedPathsMap[token0][token1][allowedPathsMap[token0][token1].length - 1];
+        uint256 currentLength = allowedPathsMap[token0][token1].length;
+        require(currentLength > pathIndex, "RouterInfo: pathIndex out of bounds");
+        allowedPathsMap[token0][token1][pathIndex] = allowedPathsMap[token0][token1][currentLength - 1];
         allowedPathsMap[token0][token1].pop();
         _decreasePairPaths(token0, token1);
     }

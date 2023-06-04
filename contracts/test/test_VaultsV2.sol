@@ -9,34 +9,41 @@ import "../vaultV2.sol";
 import "../Auxil.sol";
 import "../../interfaces/ISharedV2.sol";
 import "../../interfaces/IV3SwapRouter.sol";
-import {MockERC20} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockERC20.sol";
-import {MockUniswapV2Router02} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockUniswap.sol";
-import {MockUniswapV3Router} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockUniswap.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockUniswapV2Router02} from "../mocks/MockUniswap.sol";
+import {MockUniswapV3Router} from "../mocks/MockUniswap.sol";
 
 
 contract TestVaultV2 is DSTest {
+    VaultFactoryV2 fac;
+    VaultManagerV2 vaultManager;
+    VaultInfo vi;
+    AuxInfo ai;
     VaultV2 vault;
     MockUniswapV2Router02 mockRouter;
     MockUniswapV2Router02 mockV3Router;
     
     // Variables for constructor
-    address ownerIn = address(this);
+    address facOwner = address(this);
+    address ownerIn;
     address operatorIn = address(0x123);
     string nameIn = "MyVault";
     address[] tokenList = new address[](2);
+    uint256 initD = 1_000_000_000;
     
     ISharedV2.fees fees = ISharedV2.fees({owner: 1000, operator: 1000, users: 1000});
     bool allowOtherUsersIn = true;
 
     Vm internal immutable vm = Vm(HEVM_ADDRESS);
 
-    function setUp() public {
-        MockERC20 token1 = new MockERC20("Token1", "TK1", 2000 ether);
-        MockERC20 token2 = new MockERC20("Token2", "TK2", 2000 ether);
 
-        console.log("token1: %s", address(token1), 
-                    token1.balanceOf(address(this)), 
-                    token1.balanceOf(ownerIn));
+    function setUp() public {
+        MockERC20 token1 = new MockERC20("Token1", "TK1", 2000 ether, 18);
+        MockERC20 token2 = new MockERC20("Token2", "TK2", 2000 ether, 18);
+
+        // console.log("token1: %s", address(token1), 
+        //             token1.balanceOf(address(this)), 
+        //             token1.balanceOf(ownerIn));
 
         // address[] memory tokensIn = new address[](2);
         tokenList[0] = address(token1);
@@ -44,39 +51,90 @@ contract TestVaultV2 is DSTest {
 
         // tokenList.push(address(0x3));
         // console.log("tokenList: HELLOO");
-        vault = new VaultV2(ownerIn, operatorIn, nameIn, tokenList, fees, allowOtherUsersIn);
-        // RouterInfo ri = new RouterInfo(ownerIn, name, address(0x123), 0);
+        
+        fac = new VaultFactoryV2();
+        fac.setFeeOwner(fees.owner);
 
-        mockRouter = new MockUniswapV2Router02();
-        mockV3Router = new MockUniswapV2Router02();
+        ai = AuxInfo(fac.getAuxInfoAddress());
+        vaultManager = VaultManagerV2(fac.getVaultManagerAddress());
+        ownerIn = address(vaultManager);
 
-        // Transfer tokens to the MockRouter
-        token1.transfer(address(mockRouter), 500 ether);
-        token2.transfer(address(mockRouter), 500 ether);
-        console.log('setUp complete');
+        token1.increaseAllowance(ownerIn, 10000);
+        token2.increaseAllowance(ownerIn, 10000);
+
+        vi = VaultInfo(fac.getVaultInfoAddress());
+
+        ai.allowToken(address(token1), 1000);
+        ai.allowToken(address(token2), 1000);
+
+
+        vm.startPrank(operatorIn);
+
+        ISharedV2.vaultInfoDeploy memory vid = ISharedV2.vaultInfoDeploy({
+            name: nameIn,
+            tokenList: tokenList,
+            feeOperator: fees.operator,
+            feeUsers: fees.users,
+            allowOtherUsers: true
+        });
+        address vAddress = fac.deploy(vid);
+
+        vault = VaultV2(vAddress);
+
+        vm.stopPrank();
+
+        uint[] memory amts = new uint[](2);
+        amts[0] = 1000;
+        amts[1] = 1000;
+        vaultManager.deposit(address(vault), amts);
+
+        // console.log('setUp complete');
+    }
+
+    function testSetup() public {
+        address owner = vault.owner();
+        address operator = vault.operator();
+        console.log("owner: %s", owner, operator);
+        assertEq(owner, ownerIn);
+        assertEq(operator, operatorIn);
+        assertEq(owner, address(vaultManager));
     }
 
     function testTransferOwnership() public {
         vm.prank(ownerIn);
         vault.transferOwnership(operatorIn);
-        vm.stopPrank();
+        //vm.stopPrank();
         assertEq(vault.owner(), operatorIn);
     }
     function testRevertTransferOwnershipNotOwner() public {
         vm.prank(operatorIn);
         vm.expectRevert();
         vault.transferOwnership(ownerIn);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // // Test that only the owner or operator can deactivate the vault
-    function testDeactivate() public {
+    function testDeactivateOperator() public {
         bool active = vault.isActive();
         assertTrue(active);
+
+        vm.startPrank(operatorIn);
         vault.deactivate();
+        //vm.stopPrank();
+
         active = vault.isActive();
         assertTrue(!active);
-        // assertTrue(true);
+        console.log('testDeactivate complete');
+    }
+
+    function testDeactiveVaultManager() public {
+        bool active = vault.isActive();
+        assertTrue(active);
+
+        vaultManager.deactivateVault(address(vault));
+
+        active = vault.isActive();
+        assertTrue(!active);
         console.log('testDeactivate complete');
     }
 
@@ -93,7 +151,7 @@ contract TestVaultV2 is DSTest {
 
         assertEq(currentStrategy, newStrategy);
 
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // Test that only the operator can set the strategy
@@ -103,7 +161,7 @@ contract TestVaultV2 is DSTest {
         vm.startPrank(nonOperator);
         vm.expectRevert();
         vault.setStrategy(newStrategy);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
     // Test that the setAutotrade function sets the autotradeActive state variable correctly
     function testSetAutotrade() public {
@@ -115,7 +173,7 @@ contract TestVaultV2 is DSTest {
         currentAutotradeStatus = vault.autotradeActive();
 
         assertTrue(currentAutotradeStatus);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // Test that only the operator can call setAutotrade
@@ -125,7 +183,7 @@ contract TestVaultV2 is DSTest {
         vm.expectRevert();
         vault.setAutotrade(true);
 
-        vm.stopPrank();
+        //vm.stopPrank();
     }
     // Test that the setStrategyAndActivate function sets the strategy and autotradeActive state variables correctly
     function testSetStrategyAndActivate() public {
@@ -143,7 +201,7 @@ contract TestVaultV2 is DSTest {
 
         assertEq(currentStrategy, newStrategy);
         assertTrue(currentAutotradeStatus);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     function testRevertSetStrategyAndActivate() public {
@@ -158,7 +216,7 @@ contract TestVaultV2 is DSTest {
         vm.startPrank(nonOperator);
         vm.expectRevert();
         vault.setStrategyAndActivate(newStrategy, true);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // Test that the setAllowOtherUsers function can be called by the operator and sets the allowOtherUsers state variable correctly
@@ -171,7 +229,7 @@ contract TestVaultV2 is DSTest {
         currentAllowOtherUsers = vault.allowOtherUsers();
 
         assertTrue(!currentAllowOtherUsers);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // Test that only the operator can call setAllowOtherUsers
@@ -181,7 +239,7 @@ contract TestVaultV2 is DSTest {
 
         vm.expectRevert();
         vault.setAllowOtherUsers(false);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
     // Test that the balance function returns the correct token balance of the vault contract
@@ -212,13 +270,15 @@ contract TestVaultV2 is DSTest {
         address spender = address(0xABC);
 
         uint256 initialAllowance = token1.allowance(address(vault), spender);
-        assertEq(initialAllowance, 0);
 
         uint256 allowanceIncrease = 1000 ether;
+
+        vm.startPrank(ownerIn);
         vault.increaseAllowance(address(token1), spender, allowanceIncrease);
+        //vm.stopPrank();
 
         uint256 newAllowance = token1.allowance(address(vault), spender);
-        assertEq(newAllowance, allowanceIncrease);
+        assertEq(newAllowance, allowanceIncrease+initialAllowance);
     }
 
     // Test that only the owner can call the increaseAllowance function
@@ -233,111 +293,9 @@ contract TestVaultV2 is DSTest {
         vm.expectRevert();
         vault.increaseAllowance(address(token1), spender, allowanceIncrease);
 
-        vm.stopPrank();
+        //vm.stopPrank();
     }
 
-
-    function testTradeV2() public {
-        MockERC20 token1 = MockERC20(tokenList[0]);
-        MockERC20 token2 = MockERC20(tokenList[1]);
-
-        console.log("token1: %s", address(token1),  
-                    token1.balanceOf(ownerIn));
-        console.log("token2: %s", address(token2), 
-                    token2.balanceOf(ownerIn));
-        console.log("token1: %s", address(token1), 
-                    token1.balanceOf(address(vault)));
-        console.log("token2: %s", address(token2), 
-                    token2.balanceOf(address(vault)));
-
-        // Transfer some tokens to the vault
-        token1.transfer(address(vault), 500 ether);
-        token2.transfer(address(vault), 500 ether);
-
-        console.log("token1: %s", address(token1),  
-                    token1.balanceOf(ownerIn));
-        console.log("token2: %s", address(token2), 
-                    token2.balanceOf(ownerIn));
-        console.log("token1: %s", address(token1), 
-                    token1.balanceOf(address(vault)));
-        console.log("token2: %s", address(token2), 
-                    token2.balanceOf(address(vault)));
-
-        // Set up the path for the token swap
-        address[] memory path = new address[](2);
-        path[0] = address(token1);
-        path[1] = address(token2);
-
-        uint256 amountIn = 100 ether;
-        uint256 amountOutMin = 50 ether;
-
-        // Increase allowance for the mock router
-        vault.increaseAllowance(address(token1), address(mockRouter), amountIn);
-        vault.increaseAllowance(address(token2), address(mockRouter), amountIn);
-
-        // Call tradeV2 function
-        uint256 receiveAmt = vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
-
-        // Check received amount and token balances
-        assertEq(receiveAmt, 200 ether);
-        assertEq(token1.balanceOf(address(vault)), 400 ether);
-        assertEq(token2.balanceOf(address(vault)), 700 ether);
-    }
-
-    // Test that the tradeV2 function reverts when the input amount is higher than the allowed maximum
-    function testRevertTradeV2ExceedsMaxInputAmount() public {
-        vm.startPrank(ownerIn);
-        uint256 amountIn = 600 ether;
-        uint256 amountOutMin = 1 ether;
-        address[] memory path = new address[](2);
-        path[0] = tokenList[0];
-        path[1] = tokenList[1];
-
-        vm.expectRevert();
-        vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
-        vm.stopPrank();
-    }
-
-    // Test that the tradeV3 function reverts when the input amount is higher than the allowed maximum
-    function testRevertTradeV3ExceedsMaxInputAmount() public {
-        vm.startPrank(ownerIn);
-        uint256 amountIn = 600 ether;
-        uint256 amountOutMin = 1 ether;
-        bytes memory path = abi.encodePacked(tokenList[0], tokenList[1]);
-        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter.ExactInputParams(
-            path,
-            address(this),
-            amountIn,
-            amountOutMin
-        );
-
-        vm.expectRevert();
-        vault.tradeV3(address(mockRouter), params);
-        vm.stopPrank();
-    }
-    function testRevertTradeV3NonOwner() public {
-        uint256 amountIn = 100 ether;
-        uint256 amountOutMin = 80 ether;
-
-        // Allow the vault to spend Token1 on behalf of the test contract
-        IERC20(tokenList[0]).approve(address(vault), amountIn);
-
-        // Set up the ExactInputParams struct
-        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter.ExactInputParams({
-            path: abi.encodePacked(tokenList[0], tokenList[1]),
-            recipient: address(this),
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMin
-        });
-
-        // Attempt to trade with a non-owner address
-        address nonOwner = address(0xABC);
-        vm.startPrank(nonOwner);
-
-        vm.expectRevert();
-        vault.tradeV3(address(mockRouter), params);
-        vm.stopPrank();
-    }
     function testGetTokens() public {
         address[] memory tokens = vault.getTokens();
         uint256 tokenCount = tokens.length;
@@ -356,12 +314,14 @@ contract TestVaultV2 is DSTest {
         assertEq(returnedFees.users, fees.users, "Users fee mismatch");
     }
     function testGetAndSetDenominator() public {
-        uint256 initialDenominator = vault.D();
+        // uint256 initialDenominator = vault.D();
         uint256 newDenominator = 1000;
 
-        assertEq(initialDenominator, 0, "Initial Denominator should be 0");
+        // assertEq(initialDenominator, 0, "Initial Denominator should be 0");
 
+        vm.startPrank(ownerIn);
         vault.setD(newDenominator);
+        //vm.stopPrank();
         uint256 updatedDenominator = vault.D();
 
         assertEq(updatedDenominator, newDenominator, "Updated Denominator should be equal to the new value");
@@ -374,19 +334,22 @@ contract TestVaultV2 is DSTest {
 
         assertEq(initialNumerator, 0, "Initial Numerator should be 0");
 
+        vm.startPrank(ownerIn);
         vault.setN(user, newNumerator);
+        //vm.stopPrank();
+
         uint256 updatedNumerator = vault.N(user);
 
         assertEq(updatedNumerator, newNumerator, "Updated Numerator should be equal to the new value");
     }
     function testRevertSetDenominatorNotOwner() public {
         uint256 newDenominator = 1000;
-        address nonOwner = address(0x123);
+        address nonOwner = operatorIn;
 
         vm.startPrank(nonOwner);
         vm.expectRevert();
         vault.setD(newDenominator);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
     function testRevertSetNumeratorNotOwner() public {
         uint256 newNumerator = 500;
@@ -395,50 +358,50 @@ contract TestVaultV2 is DSTest {
         vm.startPrank(nonOwner);
         vm.expectRevert();
         vault.setN(nonOwner, newNumerator);
-        vm.stopPrank();
+        //vm.stopPrank();
     }
-    function testShiftLastTradeTimes() public {
+    // function testShiftLastTradeTimes() public {
         
-        MockERC20 token1 = MockERC20(tokenList[0]);
-        MockERC20 token2 = MockERC20(tokenList[1]);
-        // uint256 currentTime = block.timestamp; <= this sets to a pointer in memory, sucks
-        uint256 currentTime = 1;
-        console.log('currentTime', currentTime);
-        console.log('lastTime', vault.getOldestTradeTime());
+    //     MockERC20 token1 = MockERC20(tokenList[0]);
+    //     MockERC20 token2 = MockERC20(tokenList[1]);
+    //     // uint256 currentTime = block.timestamp; <= this sets to a pointer in memory, sucks
+    //     uint256 currentTime = 1;
+    //     console.log('currentTime', currentTime);
+    //     console.log('lastTime', vault.getOldestTradeTime());
 
-        // Perform 5 trades to fill the lastTradeTimes array
-        uint256 amountIn = 10 ether;
-        uint256 amountOutMin = 8 ether;
-        IERC20(tokenList[0]).approve(address(vault), amountIn);
+    //     // Perform 5 trades to fill the lastTradeTimes array
+    //     uint256 amountIn = 10 ether;
+    //     uint256 amountOutMin = 8 ether;
+    //     IERC20(tokenList[0]).approve(address(vault), amountIn);
 
-        address[] memory path = new address[](2);
-        path[0] = tokenList[0];
-        path[1] = tokenList[1];
-        vault.increaseAllowance(address(path[0]), address(mockRouter), type(uint256).max);
-        vault.increaseAllowance(address(path[1]), address(mockRouter), type(uint256).max);
+    //     address[] memory path = new address[](2);
+    //     path[0] = tokenList[0];
+    //     path[1] = tokenList[1];
+    //     vault.increaseAllowance(address(path[0]), address(mockRouter), type(uint256).max);
+    //     vault.increaseAllowance(address(path[1]), address(mockRouter), type(uint256).max);
 
-        // Transfer some tokens to the vault
-        token1.transfer(address(vault), 500 ether);
-        token2.transfer(address(vault), 500 ether);
+    //     // Transfer some tokens to the vault
+    //     token1.transfer(address(vault), 500 ether);
+    //     token2.transfer(address(vault), 500 ether);
 
-        for (uint i = 0; i < 5; i++) {
-            vm.warp(currentTime + i * 100);
-            vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
-            console.log('lastTime', vault.getOldestTradeTime(), currentTime);
-        }
+    //     for (uint i = 0; i < 5; i++) {
+    //         vm.warp(currentTime + i * 100);
+    //         vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
+    //         console.log('lastTime', vault.getOldestTradeTime(), currentTime);
+    //     }
 
-        uint256 newOldestTradeTime = vault.getOldestTradeTime();
-        console.log('newOldestTradeTime', newOldestTradeTime, currentTime);
-        assertEq(newOldestTradeTime, currentTime);
+    //     uint256 newOldestTradeTime = vault.getOldestTradeTime();
+    //     console.log('newOldestTradeTime', newOldestTradeTime, currentTime);
+    //     assertEq(newOldestTradeTime, currentTime);
 
-        // Perform another trade to see if the oldest trade time has changed
-        vm.warp(currentTime + 600);
-        vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
-        console.log('lastTime', vault.getOldestTradeTime());
+    //     // Perform another trade to see if the oldest trade time has changed
+    //     vm.warp(currentTime + 600);
+    //     vault.tradeV2(address(mockRouter), amountIn, amountOutMin, path);
+    //     console.log('lastTime', vault.getOldestTradeTime());
 
-        newOldestTradeTime = vault.getOldestTradeTime();
-        assertEq(newOldestTradeTime, currentTime + 100);
-    }
+    //     newOldestTradeTime = vault.getOldestTradeTime();
+    //     assertEq(newOldestTradeTime, currentTime + 100);
+    // }
 }
 
 

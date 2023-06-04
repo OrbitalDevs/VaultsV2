@@ -6,9 +6,9 @@ import {Utilities} from "./utils/Utilities.sol";
 import {console} from "./utils/Console.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-import {MockERC20} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockERC20.sol";
-import {MockUniswapV2Router02} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockUniswap.sol";
-import {MockUniswapV3Router} from "../lib/openzeppelin-contracts@4.5.0/contracts/MockUniswap.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockUniswapV2Router02} from "../mocks/MockUniswap.sol";
+import {MockUniswapV3Router} from "../mocks/MockUniswap.sol";
 
 import "../vaultV2.sol";
 import "../Auxil.sol";
@@ -30,8 +30,7 @@ contract TestVaultFactoryV2 is DSTest {
     // RouterInfo routerInfo;
     
     uint256 creationBlock;
-
-
+    
     Vm internal immutable vm = Vm(HEVM_ADDRESS);
 
     function setUp() public {
@@ -42,7 +41,7 @@ contract TestVaultFactoryV2 is DSTest {
         owner = users[11];
 
         for (uint i=0; i<10; i++){
-            tokens[i] = new MockERC20("mockToken", "TK", 1000*10**18);
+            tokens[i] = new MockERC20("mockToken", "TK", 1000*10**18, 18);
         }
 
         vm.startPrank(owner);

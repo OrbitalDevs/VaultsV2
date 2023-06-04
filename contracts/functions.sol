@@ -7,17 +7,17 @@ import "./lib/gnosis/Arithmetic.sol";
  *@dev Shared functions used in VaultFactory and VaultManager
  */
 library functions {
-    // function sorted(address token0, address token1) internal pure returns (address, address) {
-    //     return token0 < token1 ? (token0, token1) : (token1, token0);
-    // }
-    // function isSortedAddresses(address[] memory addressList) internal pure returns (bool){
-    //     for (uint256 i = 0; i < addressList.length - 1; i++) {
-    //         if (addressList[i] > addressList[i + 1]) {
-    //             return false;
-    //         }
-    //     }
-    //     return true;
-    // }
+    function willOverflowWhenMultiplied(uint256 a, uint256 b) internal pure returns (bool) {
+        if (b == 0) {
+            return false;
+        }
+        return a > type(uint256).max / b;
+    }
+
+    function sorted(address token0, address token1) internal pure returns (address, address) {
+        return token0 < token1 ? (token0, token1) : (token1, token0);
+    }
+
     function listSum(uint256[] memory list) internal pure returns (uint256){
         uint256 sum = 0;
         for (uint256 i = 0; i < list.length; i++) {
@@ -52,12 +52,17 @@ library functions {
         }
         return true;
     }
+
     //get deposit amts which will have the correct ratios, when given an amt of a reference token
+    //for front end convenience, if desired. Not used in contract logic.
     function getAmtsNeededForDeposit(uint256 indexOfReferenceToken, uint256 amtIn, uint256[] memory balances) public pure 
         returns (uint256 requestCode, uint256[] memory amtsNeeded) {
         require(indexOfReferenceToken < balances.length && amtIn > 0, "invalid");
+        
         amtsNeeded = new uint256[](balances.length);
-        (, uint256 greatest) = indexOfGreatest(balances);
+
+        (uint256 gi, uint256 greatest) = indexOfGreatest(balances);
+
         if (greatest == 0) {
             requestCode = 0;  // initial Deposit, anything is ok
             return (requestCode, amtsNeeded);
@@ -65,14 +70,12 @@ library functions {
             requestCode = 1; //invalid reference token. Balance must be > 0
             return (requestCode, amtsNeeded);
         }
+
+        uint256 greatestResult = Arithmetic.overflowResistantFraction(amtIn, balances[gi], balances[indexOfReferenceToken]);
+
         requestCode = 2; // normal deposit
         for (uint256 i = 0; i < balances.length; i++) {
-            if (i == indexOfReferenceToken) {
-                amtsNeeded[i] = amtIn;
-            } else {
-                // amtsNeeded[i] = (amtIn * balances[i]) / balances[indexOfReferenceToken];
-                amtsNeeded[i] = Arithmetic.overflowResistantFraction(amtIn, balances[i], balances[indexOfReferenceToken]);
-            }
+            amtsNeeded[i] = Arithmetic.overflowResistantFraction(greatestResult, balances[i], greatest); 
         }
         return (requestCode, amtsNeeded);
     }
@@ -85,23 +88,22 @@ library functions {
         address[] memory addresses = new address[](numAddresses);
 
         assembly ("memory-safe") {
-            let dataPtr := add(data, 0x14)
+            let dataPtr := add(data, 0x14) //20 bytes
             // let dataPtr := add(data, 0x0)
             for {let i := 0} lt(i, numAddresses) {i := add(i, 1)} {
                 mstore(
-                    add(addresses, mul(add(i,1), 0x20)), 
-                    mload(add(dataPtr, mul(i, 0x14)))
+                    add(addresses, mul(add(i,1), 0x20)), //32 bytes
+                    mload(add(dataPtr, mul(i, 0x14))) //20 bytes
                 )
             }
         }
         return addresses;
     }
 
-    // function max(uint256 a, uint256 b) internal pure returns (uint256) {
-    //     return a > b ? a : b;
-    // }
-
-    // function min(uint256 a, uint256 b) internal pure returns (uint256) {
-    //     return a < b ? a : b;
-    // }        
+    function max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a > b ? a : b;
+    }
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
 }
