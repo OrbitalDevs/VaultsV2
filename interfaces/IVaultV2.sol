@@ -5,6 +5,7 @@ import "./IV3SwapRouter.sol";
 import "./ISharedV2.sol";
 
 interface IVaultV2 {
+    function owner() external view returns (address);
     function name() external view returns (string memory);
     function creationTime() external view returns (uint256);
     function numTokens() external view returns (uint256);
@@ -26,12 +27,24 @@ interface IVaultV2 {
     function deactivate() external;
     function setOperator(address operatorIn) external;
     function setAllowOtherUsers(bool allow) external;
-    function setStrategy(string calldata stratString) external;
+
+
     function setStrategyAndActivate(string calldata stratString, bool activate) external;
     function setAutotrade(bool status) external;
+    
+    
     function balance(address token) external view returns (uint256);
     function balances() external view returns (uint256[] memory);
     function totalBalance() external view returns (uint256);
+    
+    
+    function takeBalanceSnapshot() external;
+    function setBalanceTracked(uint256[] memory bals) external;
+    function getBalanceTracked() external view returns (uint256[] memory);
+    
+    
+    function getUserBalances(address userAddress) external view returns (uint256[] memory bals);
+    
     function increaseAllowance(address token, address spenderAddress, uint256 value) external;
     function tradeV2(address routerAddress, uint amountIn, uint amountOutMin, address[] calldata path) external returns (uint256 receiveAmt);
     function tradeV3(address routerAddress, IV3SwapRouter.ExactInputParams calldata params) external returns (uint256 receiveAmt);

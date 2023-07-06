@@ -4,6 +4,7 @@ pragma solidity=0.8.16;
 
 import "./lib/openzeppelin-contracts@4.5.0/contracts/Ownable.sol";
 import "./lib/openzeppelin-contracts@4.5.0/contracts/SafeERC20.sol";
+import "./lib/openzeppelin-contracts@4.5.0/contracts/IERC20.sol";
 import "./lib/gnosis/Arithmetic.sol";
 
 import "../interfaces/IV3SwapRouter.sol";
@@ -40,7 +41,7 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
     AuxInfo immutable private AI;
     address immutable private vaultInfoAddress;
     
-    uint256 private creationBlock; //for front end use to know when to start scanning for txs
+    uint256 immutable private creationBlock;
 
     constructor() {
         // transferOwnership(msg.sender);
@@ -51,11 +52,6 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
     }
     function getCreationBlock() external view returns(uint256){
         return creationBlock;
-    }
-    //function needed to set creation block on L2 blockchains.
-    //(block.number returns approx L1 block on Arbitrum)
-    function setCreationBlock(uint256 creationBlockIn) external onlyOwner {
-        creationBlock = creationBlockIn;
     }
     function getVaultManagerAddress() external view returns(address){
         return vaultManagerAddress;
@@ -110,11 +106,11 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
         // require(sumDenoms > 0 && sumDenoms <= maxInitialDenominator, "invalid sumDenoms");
 
         //using greatest denominator will be sufficient.
-        // uint256[] memory allDenoms = new uint256[](params.tokenList.length);
-        // for (uint256 i = 0; i < params.tokenList.length; i++) {
-        //     allDenoms[i] = AI.getAllowedTokenInfo(params.tokenList[i]).initialDenominator;
-        // }
-        // (/*uint greatesIndex*/, uint256 greatest) = functions.indexOfGreatest(allDenoms);        
+        uint256[] memory allDenoms = new uint256[](params.tokenList.length);
+        for (uint256 i = 0; i < params.tokenList.length; i++) {
+            allDenoms[i] = AI.getAllowedTokenInfo(params.tokenList[i]).initialDenominator;
+        }
+        (/*uint greatesIndex*/, uint256 greatest) = functions.indexOfGreatest(allDenoms);        
 
         address vt = address(new VaultV2(vaultManagerAddress, 
                                  msg.sender,
@@ -122,7 +118,8 @@ contract VaultFactoryV2 is Ownable, ReentrancyGuarded {
                                  params.tokenList, 
                                  ISharedV2.fees(_feeOwner, params.feeOperator, params.feeUsers), 
                                  params.allowOtherUsers, 
-                                 vaultInfoAddress)
+                                 vaultInfoAddress, 
+                                 greatest)
                             );
 
         isVaultDeployedMap[vt] = true;
@@ -157,9 +154,6 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     uint256 private trade5MinTime = 60*60; //5 trades per hour max
     // uint256 private constant maxInitialDenominator = 2**127;
     bool private protocolPaused = false;
-    uint256 private constant initDenom = type(uint128).max;
-
-    mapping (address => bool) private isExcludedMap; //excluded from fees
 
     constructor(address ownerIn, AuxInfo AIIn) {
         transferOwnership(ownerIn);
@@ -170,16 +164,6 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         GS = new GasStation();
         // CLI = new ChainlinkInterface(ownerIn);
         AI = AIIn;
-    }
-
-    function isExcluded(address user) public view returns (bool) {
-        return isExcludedMap[user];
-    }
-
-    event SetExcluded(address user, bool excluded);
-    function setExcluded(address user, bool excluded) external onlyOwner {
-        isExcludedMap[user] = excluded;
-        emit SetExcluded(user, excluded);
     }
 
     function getProtocolPaused() external view returns (bool) {
@@ -276,69 +260,64 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
     }
 
     event Deposit(address vaultAddress, address user, uint256[] amts);
-    //Vault stores user balances as ratio of the total. The vault has a single Denominator, vlt.D(), 
-    //which is always equal to the sum of the Numerators.
+    //Vault stores user balances as ratio of the total. The vault has a single Denominator, vlt.D(), which is always equal to the sum of the Numerators.
     function deposit(address vaultAddress, uint256[] memory amts) external nonReentrant {
-        //prechecks
         require(!protocolPaused, "paused");
         require(VF.isVaultDeployed(vaultAddress), "invalid");
         
-        VaultV2 vlt = VaultV2(vaultAddress);
-        uint256[] memory balancesTracked = vlt.getBalanceTracked();
-        address[] memory tkns = vlt.getTokens();
 
-        //input checks
+        VaultV2 vlt = VaultV2(vaultAddress);
         require(vlt.isActive() && (vlt.allowOtherUsers() || msg.sender==vlt.operator()), "can't deposit");
 
-        //ensure deposits are in the same ratios as the vault's "Tracked Balances".
-        //current balances not used to prevent "Donation Skew Attack" as well as "Donation DOS Attack".
-        require(functions.ratiosMatch(balancesTracked, amts), "ratios don't match");
+        // uint256 amt = functions.listSum(amts);
 
-        ////values before transfer
-        //"Virtual Total Balance" as of the last snapshot.
-        //Is required to prevent "Donation Skew Attack".
-        // uint256 T = functions.listSum(balancesTracked) + 1; 
-        uint256 T = functions.listSum(balancesTracked);
-        uint256[] memory balancesBeforeDeposit = vlt.balances();
+        //enforce reasonable deposit size
+        // require(amt > 0 && amt < type(uint128).max, "must be > 0");
 
-        //transfer
+        
+        //ensure deposits are in the same ratios as the vault's last balance snapshot.
+        //current balances not used to prevent donation DOS attack.
+        require(functions.ratiosMatch(vlt.getRatioSnapshot(), amts), "ratios don't match");
+
+        
+        uint256 deltaN;
+
+        uint256 T  = vlt.virtualTotalBalance(); //will be at least 1
+        uint256 D = vlt.D();
+
+        //moved N and D updates until after the deposit, to account for taxed tokens
+        // if (functions.willOverflowWhenMultiplied(amt, D)) {
+        //     require(T > amt || T > D, "overflow");
+        // }
+        // deltaN = Arithmetic.overflowResistantFraction(amt, D, T);
+        
+        // vlt.setN(msg.sender,  vlt.N(msg.sender) + deltaN);
+        // vlt.setD(D + deltaN); //D always kept = sum of all Ns, plus vlt.initD()
+
+        address[] memory tkns = vlt.getTokens();
         for (uint256 i = 0; i < tkns.length; i++) {
             if (amts[i] > 0) {
                 IERC20(tkns[i]).safeTransferFrom(msg.sender, vaultAddress, amts[i]);
             }
         }
 
-        //vaules after transfer
-        uint256[] memory amtsActual = functions.listDiff(vlt.balances(), balancesBeforeDeposit);
-        uint256 amt = functions.listSum(amtsActual);
 
-        //enforce reasonable deposit size
-        require(amt > 0 && amt < type(uint128).max, "too much"); 
+        uint256 amt = vlt.virtualTotalBalance() - T; //amt actually deposited, after taxes
+        require(amt > 0 && amt < type(uint128).max, "must be > 0");
 
-        //update N and D
-        uint256 D = vlt.D();
-
-        if (D == 0){
-            vlt.setN(msg.sender, initDenom);
-            vlt.setD(initDenom);
-        } else {
-            if (functions.willOverflowWhenMultiplied(amt, D)) {
-                require(T > amt || T > D, "overflow");
-            }
-            uint256 deltaN = Arithmetic.overflowResistantFraction(amt, D, T);
-            vlt.setN(msg.sender,  vlt.N(msg.sender) + deltaN);
-            vlt.setD(D + deltaN); //D always kept = sum of all Ns
+        if (functions.willOverflowWhenMultiplied(amt, D)) {
+            require(T > amt || T > D, "overflow");
         }
+        deltaN = Arithmetic.overflowResistantFraction(amt, D, T);
+        
+        vlt.setN(msg.sender,  vlt.N(msg.sender) + deltaN);
+        vlt.setD(D + deltaN); //D always kept = sum of all Ns, plus vlt.initD()
 
-
-        //update balancesTracked
-        if (msg.sender == vlt.operator()) { //ok to let operator take snapshot (no incentive to DOS attack)
-            vlt.takeBalanceSnapshot();
-        } else {
-            vlt.setBalanceTracked(functions.listAdd(balancesTracked, amtsActual)); //safer option can't alter ratios via Donation attack
+        
+        if (D == vlt.initD()) { //take snapshot if first deposit
+            vlt.takeRatioSnapshot();
         }
         
-
         emit Deposit(vaultAddress, msg.sender, amts);
     }
 
@@ -347,127 +326,77 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
                    uint256 deltaN, 
                    ISharedV2.fees deltaNFees, 
                    uint256 DBefore);
-
-    //Needed to break up withdraw function to prevent stack too deep error
-    function _withdraw(VaultV2 vlt, uint256 deltaN) private returns (bool isFinalWithdrawal){
-        uint256 D = vlt.D();
-        // bool isLastUser = (vlt.N(msg.sender) == D - vlt.initD());
-        bool isLastUser = vlt.isLastUser(msg.sender);
-
-        //caclulate fees
-        ISharedV2.fees memory deltaNFees = ISharedV2.fees(0, 0, 0);
-        if (!(msg.sender==vlt.operator() || isExcluded(msg.sender))) { //not exempt from fees
-            ISharedV2.fees memory feeRate = vlt.getFees();
-
-            deltaNFees.owner = Arithmetic.overflowResistantFraction(deltaN, feeRate.owner, 100_000); //overflow protection
-            deltaNFees.operator = Arithmetic.overflowResistantFraction(deltaN, feeRate.operator, 100_000);
-            
-            if (!(isLastUser)) { //User fees not due if last user
-                deltaNFees.users = Arithmetic.overflowResistantFraction(deltaN, feeRate.users, 100_000);
-            }
-        } 
-        
-
-        //calculate amounts out
-        address[] memory tkns = vlt.getTokens();
-        uint256[] memory balancesForWithdrawal;
-        // uint256[] memory amtsOutCaller = new uint256[](tkns.length);
-        // uint256[] memory amtsOutOwner = new uint256[](tkns.length);
-
-        //transfer tokens
-        isFinalWithdrawal = (isLastUser && deltaN == vlt.N(msg.sender) && deltaNFees.operator==0 && deltaNFees.users==0);
-        if (isFinalWithdrawal) {
-            //ok to use real balances for final withdrawal. DOS attack won't work in this case anyway becasue ratios get set to zero.
-            balancesForWithdrawal = vlt.balances(); 
-            for (uint256 i = 0; i < tkns.length; i++) {
-                uint256 thisBalance = balancesForWithdrawal[i];
-                // amtsOutOwner[i] = Arithmetic.overflowResistantFraction(virtualBalance, deltaNFees.owner, D);
-                // amtsOutCaller[i] = balancesForWithdrawal[i] - amtsOutOwner[i]; //last out gets the dust
-                uint256 amtOutOwner = Arithmetic.overflowResistantFraction(thisBalance, deltaNFees.owner, D);
-                uint256 amtOutCaller = thisBalance - amtOutOwner; //last out gets the dust
-                
-                increaseAllowanceIfNeeded(vlt, tkns[i], amtOutCaller + amtOutOwner);
-                if (amtOutOwner > 0) {
-                    IERC20(tkns[i]).safeTransferFrom(address(vlt), _ownerFeesDest, amtOutOwner);
-                }
-                if (amtOutCaller > 0) {
-                    IERC20(tkns[i]).safeTransferFrom(address(vlt), msg.sender, amtOutCaller);
-                }
-            }
-        } else {
-            uint256 deltaNLeftover = deltaN - deltaNFees.owner - deltaNFees.operator - deltaNFees.users; //withdrawal for msg.sender
-            //use tracked balances to prevent Donation DOS attack.
-            balancesForWithdrawal = vlt.getBalanceTracked(); 
-            for (uint256 i = 0; i < tkns.length; i++) {
-                uint256 thisBalance = balancesForWithdrawal[i];
-                // amtsOutOwner[i] = Arithmetic.overflowResistantFraction(virtualTrackedBalance, deltaNFees.owner, D);
-                // amtsOutCaller[i] = Arithmetic.overflowResistantFraction(virtualTrackedBalance, deltaNLeftover, D);
-                uint256 amtOutOwner = Arithmetic.overflowResistantFraction(thisBalance, deltaNFees.owner, D);
-                uint256 amtOutCaller = Arithmetic.overflowResistantFraction(thisBalance, deltaNLeftover, D);
-
-                increaseAllowanceIfNeeded(vlt, tkns[i], amtOutCaller + amtOutOwner);
-                if (amtOutOwner > 0) {
-                    IERC20(tkns[i]).safeTransferFrom(address(vlt), _ownerFeesDest, amtOutOwner);
-                }
-                if (amtOutCaller > 0) {
-                    IERC20(tkns[i]).safeTransferFrom(address(vlt), msg.sender, amtOutCaller);
-                }
-            }
-        }
-        
-
-        //variables set after transfer
-        if (isFinalWithdrawal) {
-            vlt.setN(msg.sender, 0);
-            vlt.setD(0);
-        } else {
-            vlt.setN(msg.sender, vlt.N(msg.sender) - deltaN);
-            vlt.setN(vlt.operator(), vlt.N(vlt.operator()) + deltaNFees.operator);
-            vlt.setD(D - deltaN + deltaNFees.operator);
-        }
-
-        emit Withdraw(address(vlt), 
-                      msg.sender, 
-                      balancesForWithdrawal,
-                      deltaN, 
-                      deltaNFees,
-                      D);
-    }
     function withdraw(address vaultAddress, uint256 percentage) external nonReentrant {
-        //Do not check for protocol paused here. If protocol is paused, users can still withdraw their funds.
         require(VF.isVaultDeployed(vaultAddress), "invalid");
         require(percentage > 0 && percentage <= 100, "invalid");
         
         VaultV2 vlt = VaultV2(vaultAddress);
-
-        bool isOperator = (msg.sender == vlt.operator());
-
-        //operator allowed to take snapshot before withdrawal
-        if (isOperator) {
-            vlt.takeBalanceSnapshot();
-        }
         
-        //values before transfer
-        uint256[] memory balancesBefore = vlt.balances();
-
-
         uint256 deltaN = Arithmetic.overflowResistantFraction(vlt.N(msg.sender), percentage, 100);
         require(deltaN > 0, "no balance");
 
-        //withdraw
-        bool isFinalWithdrawal = _withdraw(vlt, deltaN);
+        ISharedV2.fees memory deltaNFees = ISharedV2.fees(0, 0, 0);
 
+        if (!(msg.sender==owner() || msg.sender==vlt.operator())) { //not exempt from fees
+            ISharedV2.fees memory feeRate = vlt.getFees();
 
-        //find real amounts out
-        uint256[] memory amtsOut = functions.listDiff(balancesBefore, vlt.balances());
-
-
-        //take snapshot
-        if (isOperator || isFinalWithdrawal) {
-            vlt.takeBalanceSnapshot();
-        } else {
-            vlt.setBalanceTracked(functions.listDiff(vlt.getBalanceTracked(), amtsOut));
+            deltaNFees.owner = Arithmetic.overflowResistantFraction(deltaN, feeRate.owner, 100_000); //overflow protection
+            deltaNFees.operator = Arithmetic.overflowResistantFraction(deltaN, feeRate.operator, 100_000);
+            if (!vlt.isLastUser(msg.sender)) { //not last user in vault
+                deltaNFees.users = Arithmetic.overflowResistantFraction(deltaN, feeRate.users, 100_000);
+            }
         }
+
+        uint256 deltaNLeftover = deltaN - deltaNFees.owner - deltaNFees.operator - deltaNFees.users; //withdrawal for msg.sender
+
+        address[] memory tkns = vlt.getTokens();
+        uint256[] memory virtualBalances = vlt.virtualBalances();
+
+        uint256[] memory amtsOutCaller = new uint256[](tkns.length);
+        uint256[] memory amtsOutOwner = new uint256[](tkns.length);
+
+        uint256 D = vlt.D();
+
+        bool finalWithdrawal = deltaN == D - vlt.initD() && deltaNFees.operator==0 && deltaNFees.users==0;
+        if (finalWithdrawal) { //final withdrawal
+            uint256[] memory balances = vlt.balances();
+            for (uint256 i = 0; i < tkns.length; i++) {
+                amtsOutOwner[i] = Arithmetic.overflowResistantFraction(virtualBalances[i], deltaNFees.owner, D);
+                amtsOutCaller[i] = balances[i] - amtsOutOwner[i]; //last out gets the dust
+            }
+        } else {
+            for (uint256 i = 0; i < tkns.length; i++) {
+                amtsOutOwner[i] = Arithmetic.overflowResistantFraction(virtualBalances[i], deltaNFees.owner, D);
+                amtsOutCaller[i] = Arithmetic.overflowResistantFraction(virtualBalances[i], deltaNLeftover, D);
+            }
+        }
+
+        for (uint256 i = 0; i < tkns.length; i++) {
+            // address token = tkns[i];
+            increaseAllowanceIfNeeded(vlt, tkns[i], amtsOutCaller[i] + amtsOutOwner[i]);
+            if (amtsOutOwner[i] > 0) {
+                IERC20(tkns[i]).safeTransferFrom(vaultAddress, _ownerFeesDest, amtsOutOwner[i]);
+            }
+            if (amtsOutCaller[i] > 0) {
+                IERC20(tkns[i]).safeTransferFrom(vaultAddress, msg.sender, amtsOutCaller[i]);
+            }
+        }
+
+        //variables set after transfer
+        vlt.setN(msg.sender, vlt.N(msg.sender) - deltaN);
+        vlt.setN(vlt.operator(), vlt.N(vlt.operator()) + deltaNFees.operator);
+        vlt.setD(D - deltaN + deltaNFees.operator);
+
+        if (finalWithdrawal){
+            vlt.takeRatioSnapshot();
+        }
+        
+        emit Withdraw(vaultAddress, 
+                      msg.sender, 
+                      virtualBalances,
+                      deltaN, 
+                      deltaNFees,
+                      D);
     }
 
     event Trade(address spendToken, 
@@ -548,7 +477,7 @@ contract VaultManagerV2 is Ownable, ReentrancyGuarded {
         require(balSpendToken - vlt.balance(params.spendToken)== params.spendAmt, "spd tk bal");
         require(vlt.balance(params.receiveToken) - balReceiveToken == receiveAmt, "rcv tk bal");
 
-        vlt.takeBalanceSnapshot();
+        vlt.takeRatioSnapshot();
 
         emit Trade(params.spendToken, params.receiveToken, balSpendToken, balReceiveToken, params.spendAmt, receiveAmt);
         
@@ -576,7 +505,7 @@ contract VaultInfo {
         VF = VaultFactoryV2(vaultFactoryAddress);
     }
 
-    //NEEDED A QUICK WAY TO CHECK IF VAULT AUTOTRADE STATUS CHANGED.
+    //ADDED AFTER AUDIT STARTED. NEEDED A QUICK WAY TO CHECK IF VAULT AUTOTRADE STATUS CHANGED.
     //CALLED ONLY BY DEPLOYED VAULTS WHENEVER AUTOTRADE STATUS OR STRATEGY CHANGES.
     event Alert(uint256 numAlerts, uint256 lastAlertBlock, uint256 lastAlertTimestamp, address lastAlertVault);
     function autotradeAlert() external {
@@ -591,7 +520,7 @@ contract VaultInfo {
     function getAlertInfo() external view returns (uint256, uint256, uint256, address) {
         return (numAlerts, lastAlertBlock, lastAlertTimestamp, lastAlertVault);
     }
-
+    //END ADDED AFTER AUDIT STARTED
 
     //an overview of the vault, for front end use
     function getVaultInfo(address vaultAddress) external view returns (ISharedV2.vaultInfoOut memory) {
@@ -628,7 +557,7 @@ contract VaultInfo {
 
 //Primary Vault contract. This contract is deployed by the VaultFactoryV2 contract by thew Vault Operator each
 //time a new vault is created. 
-contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please take note.
+contract VaultV2 is Ownable, IERC20 { //Note: ReentrancyGaurd removed! Auditor please take note.
     using SafeERC20 for IERC20;
 
     struct listInfo {
@@ -639,15 +568,16 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
     VaultInfo private immutable VI;
 
     string public name;
+    string public symbol;
     ISharedV2.fees private fees;
     uint256 public immutable creationTime;
     address[] private tokens;
-    uint256[] private balanceTracked;
+    uint256[] private ratioSnapshot;
     uint256 public immutable numTokens;
     mapping(address => listInfo) private tokenAllowedMapping;
 
-    uint256 private Denominator = 0;
-    // uint256 public immutable initD;
+    uint256 private Denominator;
+    uint256 public immutable initD;
     mapping(address => uint256) private numerators;
     address public operator;
     string public strategy = "";
@@ -657,6 +587,8 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
     
     uint256[5] private lastTradeTimes = [0,0,0,0,0];
 
+    mapping(address => mapping(address => uint256)) private allowances;
+
 
     //constructor called by VaultFactoryV2. It will set the owner to VaultManagerV2
     constructor(address ownerIn, 
@@ -665,7 +597,8 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
                 address[] memory tokensIn, 
                 ISharedV2.fees memory feesIn, 
                 bool allowOtherUsersIn, 
-                address vaultInfoAddress) {
+                address vaultInfoAddress,
+                uint256 initDIn) {
         //vault manager will be the owner.
         if (ownerIn != msg.sender) {
             transferOwnership(ownerIn);
@@ -673,9 +606,10 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
         operator = operatorIn;
         
         name = nameIn;
+        symbol = nameIn;
         
         tokens = new address[](tokensIn.length);
-        balanceTracked = new uint256[](tokensIn.length);
+        ratioSnapshot = new uint256[](tokensIn.length);
         for (uint i = 0; i < tokensIn.length; i++) {
             require(tokenAllowedMapping[tokensIn[i]].isAllowed == false, "dup token"); //check for duplicate tokens
             tokens[i] = tokensIn[i];
@@ -692,9 +626,57 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
         creationTime = block.timestamp;
 
         VI = VaultInfo(vaultInfoAddress);
-        // initD = initDIn;
-        // Denominator = initD;
+        initD = initDIn;
+        Denominator = initD;
     }
+
+    function totalSupply() external view override returns (uint256) {
+        return (D() - initD)/initD;
+    }
+
+    function balanceOf(address user) public view override returns (uint256) {
+        return N(user)/initD;
+    }
+
+    
+    function transfer(address to, uint256 amount) external override returns (bool) {
+        uint256 currentBal = balanceOf(msg.sender);
+        require(currentBal >= amount, "insuf bal");
+        _transfer(msg.sender, to, amount);
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amt) private {
+        uint256 nAmt = amt*initD;
+        numerators[from] -= nAmt;
+        numerators[to] += nAmt;
+    }
+
+    function allowance(address owner, address spender) public view override returns (uint256) {
+        return allowances[owner][spender];
+    }
+
+    function approve(address spender, uint256 amount) external override returns (bool) {
+        require(spender != address(0), "spendr 0");
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external override returns (bool) {
+        uint256 currentAllowance = allowance(from, msg.sender);
+        require(currentAllowance >= amount, "insuf allw");
+        uint256 currentBal = balanceOf(from);
+        require(currentBal >= amount, "insuf bal");
+        _transfer(from, to, amount);
+        allowances[from][msg.sender] -= amount;
+        
+        emit Approval(from, msg.sender, allowances[from][msg.sender]);
+        emit Transfer(from, to, amount);
+        return true;
+    }
+    
 
     //for use with WITHDRAW function. This function will be called by the VaultManagerV2 contract
     function increaseAllowance(address token, uint256 amt) external onlyOwner {
@@ -723,6 +705,9 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
         }
         lastTradeTimes[4] = block.timestamp;
     }
+    function getToken(uint256 index) external view returns (address) {
+        return tokens[index];
+    }
     function getTokens() external view returns (address[] memory) {
         return tokens;
     }
@@ -732,13 +717,13 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
     function getFees() external view returns (ISharedV2.fees memory) {
         return fees;
     }
-    event Deactivate(address sender);
+    event Deactive(address sender);
     function deactivate() external {
         //owner reserves the right to deactivate a vault (thru the vault manager)
         require(msg.sender == owner() || msg.sender == operator, "only own/op");
         isActive = false;
         VI.autotradeAlert();
-        emit Deactivate(msg.sender);
+        emit Deactive(msg.sender);
     }
 
     event SetOperator(address operatorIn);
@@ -755,13 +740,13 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
         emit SetAllowOtherUsers(allow);
     }
 
-    // event SetStrategy(string strategy);
-    // function setStrategy(string calldata stratString) external {
-    //     require((msg.sender == operator) && isActive, "only op");
-    //     strategy = stratString;
-    //     VI.autotradeAlert();
-    //     emit SetStrategy(stratString);
-    // }
+    event SetStrategy(string strategy);
+    function setStrategy(string calldata stratString) external {
+        require((msg.sender == operator) && isActive, "only op");
+        strategy = stratString;
+        VI.autotradeAlert();
+        emit SetStrategy(stratString);
+    }
 
     event SetStrategyAndActivate(string stratString, bool activate);
     function setStrategyAndActivate(string calldata stratString, bool activate) external {
@@ -799,47 +784,45 @@ contract VaultV2 is Ownable { //Note: ReentrancyGaurd removed! Auditor please ta
     function totalBalance() public view returns (uint256) {
         uint256 bal = 0;
         for (uint i = 0; i < numTokens; i++) {
-            // bal += balance(tokens[i]);
-            bal += balanceTracked[i];
+            bal += balance(tokens[i]);
         }
         return bal;
     }
 
-    function takeBalanceSnapshot() public onlyOwner {
-        balanceTracked = balances();
+    function takeRatioSnapshot() public onlyOwner {
+        ratioSnapshot = balances();
     }
 
-    function setBalanceTracked(uint256[] memory bals) public onlyOwner {
-        balanceTracked = bals;
+    function getRatioSnapshot() external view returns (uint256[] memory) {
+        return ratioSnapshot;
     }
 
-    function getBalanceTracked() external view returns (uint256[] memory) {
-        return balanceTracked;
+    function virtualBalances() public view returns (uint256[] memory) {
+        uint256[] memory vb = new uint256[](numTokens);
+        for (uint i = 0; i < numTokens; i++) {
+            vb[i] = balance(tokens[i]) + 1;
+        }
+        return vb;
+    }
+
+    function virtualTotalBalance() public view returns (uint256) {
+        return totalBalance() + 1;
     }
 
     function getUserBalances(address userAddress) external view returns (uint256[] memory bals) {        
         uint256 numerator = N(userAddress);
         bals = new uint256[](numTokens);
 
-        // uint256[] memory vbs = virtualBalances();
-        // uint256 thisVirtualBalance;
-
-        if (numerator == 0) {
-            return bals;
-        } else {
-            for (uint256 i = 0; i < numTokens; i++) {
+        uint256[] memory vbs = virtualBalances();
+        for (uint256 i = 0; i < numTokens; i++) {
             // bals[i] = (vaultBalances[i] * vlt.N(userAddress))/D;
-            // thisVirtualBalance = balance(tokens[i]) + 1;
-            // thisVirtualBalance = balanceTracked[i] + 1;
-            // bals[i] = Arithmetic.overflowResistantFraction(thisVirtualBalance, numerator, Denominator);
-                bals[i] = Arithmetic.overflowResistantFraction(balanceTracked[i], numerator, Denominator);
-            }
+            bals[i] = Arithmetic.overflowResistantFraction(vbs[i], numerator, Denominator);
         }
     }
 
     function isLastUser(address userAddress) external view returns (bool) {
         uint n = numerators[userAddress];
-        return (n > 0 && n == Denominator);
+        return (n > 0 && n == Denominator - initD);
     }
 
     function increaseAllowance(address token, address spenderAddress, uint256 value) external onlyOwner {

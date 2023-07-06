@@ -15,13 +15,19 @@ interface IAuxInfo {
         uint256 listPosition;
         uint256 initialDenominator;
     }
+    function owner() external view returns (address);
+    function routersLocked() external view returns (bool);
+    function getPairMaxSlippage(address tokenAIn, address tokenBIn) external view returns (uint256);
+    function setPairMaxSlippage(address tokenAIn, address tokenBIn, uint256 maxSlippageMillipercent) external;
+
+
     // Allowed Tokens Section
     function getNumAllowedTokens() external view returns (uint256);
     function getAllowedToken(uint256 index) external view returns (address);
     function getAllowedTokens() external view returns (address[] memory);
     function getAllowedTokenInfo(address token) external view returns (tokenInfo memory);
-    function setAllowedTokenInfo(address token, uint256 initialDenominator) external;
-    function allowToken(address token, uint256 initialDenominator) external;
+    // function setAllowedTokenInfo(address token, uint256 initialDenominator) external;
+    function allowToken(address token) external;
     function disallowToken(address token) external;
     function isTokenAllowed(address token) external view returns (bool);
     function areTokensAllowed(address[] memory tokens) external view returns (bool);

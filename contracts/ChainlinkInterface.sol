@@ -8,18 +8,45 @@ import "./functions.sol";
 import "../interfaces/IAggregatorV3.sol";
 
 
+
 contract ChainlinkInterface is Ownable {
-    mapping(address => address) public aggregatorAddresses; //mapping from token to USD price feed address
+    mapping(address => address) private aggregatorAddresses; //mapping from token to USD price feed address
 
-    uint256 public constant maxSlippageMillipercent = 10_000; //10% slippage absolute max
+    AggregatorV2V3Interface private sequencerUptimeFeed;
+    uint256 private immutable GRACE_PERIOD_TIME; // 3600 recommended (1 hour)
 
-    constructor(address ownerIn) {
-        transferOwnership(ownerIn);
+    uint256 public immutable maxSlippageMillipercent; //10% recommended
+
+    constructor(uint256 maxSlippageMillipercentIn, uint256 gracePeriodTimeIn) {
+        // transferOwnership(ownerIn);
+        maxSlippageMillipercent = maxSlippageMillipercentIn;
+        GRACE_PERIOD_TIME = gracePeriodTimeIn;
+    }
+
+    function setSequencerUptimeFeed(address feedAddress) external onlyOwner {
+        sequencerUptimeFeed = AggregatorV2V3Interface(feedAddress);
+    }
+
+    function getSequencerUptimeFeed() external view returns (address) {
+        return address(sequencerUptimeFeed);
+    }
+
+    function sequencerUptime() public view returns (uint256) {
+        if (address(sequencerUptimeFeed) == address(0)) { //for networks that don't have a sequencer uptime feed
+            return type(uint256).max;
+        }
+        (,int256 answer, uint startedAt,,) = sequencerUptimeFeed.latestRoundData();
+        if (answer != 0) { //sequencer is down
+            return 0;
+        }
+
+        uint256 timeSinceUp = block.timestamp - startedAt;
+        return timeSinceUp;
+        // return timeSinceUp >= GRACE_PERIOD_TIME;
     }
 
     event PriceFeedAdded(address token, address priceFeed, bool added);
     function addPriceFeed(address token, address priceFeed) external onlyOwner {
-        // require(aggregatorAddresses[token] == address(0), "price feed exists");
         aggregatorAddresses[token] = priceFeed;
         emit PriceFeedAdded(token, priceFeed, true);
     }
@@ -29,9 +56,14 @@ contract ChainlinkInterface is Ownable {
         emit PriceFeedAdded(token, address(0), false);
     }
 
+    function getPriceFeed(address token) external view returns (address) {
+        return aggregatorAddresses[token];
+    }
+
     function getPrice(address token) external view returns (int256 price, uint8 decimals) {
         address priceFeedAddress = aggregatorAddresses[token];
         require(priceFeedAddress != address(0), "price feed does not exist");
+        require(sequencerUptime() > GRACE_PERIOD_TIME, "sequencer is down");
 
         AggregatorV3Interface priceFeed = AggregatorV3Interface(priceFeedAddress);
         
@@ -41,18 +73,25 @@ contract ChainlinkInterface is Ownable {
     }
 
     function getMinReceived(address tokenFrom, address tokenTo, uint256 amtIn, uint256 slippageMillipercent) external view returns (uint256) {
+        require(sequencerUptime() > GRACE_PERIOD_TIME, "sequencer is down");
         require(slippageMillipercent <= maxSlippageMillipercent, "slippage too high");
-        address aggFrom = aggregatorAddresses[tokenFrom];
-        address aggTo = aggregatorAddresses[tokenTo];
-        require(aggFrom != address(0), "no feed");
-        require(aggTo != address(0), "no feed");
 
-        AggregatorV3Interface AIFrom = AggregatorV3Interface(aggFrom);
-        AggregatorV3Interface AITo = AggregatorV3Interface(aggTo);
+        require(aggregatorAddresses[tokenFrom] != address(0), "no feed");
+        require(aggregatorAddresses[tokenTo] != address(0), "no feed");
 
+        AggregatorV3Interface AIFrom = AggregatorV3Interface(aggregatorAddresses[tokenFrom]);
+        AggregatorV3Interface AITo = AggregatorV3Interface(aggregatorAddresses[tokenTo]);
 
-        (,int priceFromInt,,,) = AIFrom.latestRoundData();
-        (,int priceToInt,,,) = AITo.latestRoundData();
+        uint80 roundID;
+        uint80 answeredInRound;
+        int priceFromInt;
+        int priceToInt;
+
+        (roundID, priceFromInt,,, answeredInRound) = AIFrom.latestRoundData();
+        require(answeredInRound == roundID, "priceFrom stale");
+
+        (roundID, priceToInt,,, answeredInRound) = AITo.latestRoundData();
+        require(answeredInRound == roundID, "priceTo stale");
 
         //technically, oracles allow for negative prices, but we should never see that.
         require(priceFromInt > 0 && priceToInt > 0, "price feed error");
@@ -72,5 +111,7 @@ contract ChainlinkInterface is Ownable {
 
         uint256 amtReceivedNominal = (amtIn * uint256(priceFromInt) * 10**nExp)/(uint256(priceToInt) * 10**dExp);
         return (amtReceivedNominal * (100_000 - slippageMillipercent)) / 100_000;
+
+        // return ((amtIn * uint256(priceFromInt) * 10**nExp)/(uint256(priceToInt) * 10**dExp) * (100_000 - slippageMillipercent)) / 100_000;
     }
 }

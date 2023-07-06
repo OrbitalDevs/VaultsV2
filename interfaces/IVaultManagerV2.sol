@@ -5,6 +5,17 @@ import "./ISharedV2.sol";
 
 
 interface IVaultManagerV2 {
+    function owner() external view returns (address);
+
+    function isExcluded(address user) external view returns (bool);
+    function setExcluded(address user, bool excluded) external;
+    
+    function getProtocolPaused() external view returns (bool);
+    function setProtocolPaused(bool protocolPausedIn) external;
+
+    function getChainlinkInterface() external view returns (address);
+    function setChainlinkInterface(address CLIIn) external;
+
     function getAutoTrader() external view returns (address);
     function setAutoTrader(address autoTraderIn) external;
     function getGasStationParam() external view returns (uint256);

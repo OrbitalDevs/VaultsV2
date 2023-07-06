@@ -27,7 +27,7 @@ interface ISharedV2 {
         address[] tokenList;
         uint256 feeOperator;
         uint256 feeUsers;
-        bool allowOtherUsers;    
+        bool allowOtherUsers; 
     }
     struct tradeInput { 
         address spendToken;

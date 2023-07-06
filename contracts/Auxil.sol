@@ -15,7 +15,7 @@ contract AuxInfo is Ownable {
         bool allowed;
         uint256 listPosition;
         // uint256 minDepositAmt;
-        uint256 initialDenominator;
+        // uint256 initialDenominator;
     }
 
     bool public routersLocked = false;
@@ -55,17 +55,22 @@ contract AuxInfo is Ownable {
     function getAllowedTokenInfo(address token) external view returns (tokenInfo memory) {
         return (allowedTokensMap[token]);
     }
+    // function getMinDepositAmt(address token) external view returns (uint256) {
+    //     return allowedTokensMap[token].minDepositAmt;
+    // }
     // function setAllowedTokenInfo(address token, uint256 minDepositAmt, uint256 initialDenominator) external onlyOwner {
-    function setAllowedTokenInfo(address token, uint256 initialDenominator) external onlyOwner {
-        require(allowedTokensMap[token].allowed, "token not allowed");
-        // allowedTokensMap[token].minDepositAmt = minDepositAmt;
-        allowedTokensMap[token].initialDenominator = initialDenominator;
-    }
-    function allowToken(address token, uint256 initialDenominator) external onlyOwner {
+    // function setAllowedTokenInfo(address token, uint256 initialDenominator) external onlyOwner {
+    //     require(allowedTokensMap[token].allowed, "token not allowed");
+    //     // allowedTokensMap[token].minDepositAmt = minDepositAmt;
+    //     allowedTokensMap[token].initialDenominator = initialDenominator;
+    // }
+    // function allowToken(address token, uint256 initialDenominator) external onlyOwner {
+    function allowToken(address token) external onlyOwner {
         require(!allowedTokensMap[token].allowed, "token already allowed");
         allowedTokensList.push(token);
         // allowedTokensMap[token] = tokenInfo(true, allowedTokensList.length - 1, minDepAmt, initialDenominator);
-        allowedTokensMap[token] = tokenInfo(true, allowedTokensList.length - 1, initialDenominator);
+        // allowedTokensMap[token] = tokenInfo(true, allowedTokensList.length - 1, initialDenominator);
+        allowedTokensMap[token] = tokenInfo(true, allowedTokensList.length - 1);
     }
     function disallowToken(address token) external onlyOwner {
         tokenInfo memory info = allowedTokensMap[token];

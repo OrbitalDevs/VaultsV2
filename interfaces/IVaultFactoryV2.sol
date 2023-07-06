@@ -9,7 +9,9 @@ interface IVaultFactoryV2 {
     event AddNewVault(address newVaultAddress);
 
     // Functions
+    function owner() external view returns(address);
     function getCreationBlock() external view returns(uint256);
+    function setCreationBlock(uint256 creationBlockIn) external;
     function getVaultManagerAddress() external view returns(address);
     function getVaultInfoAddress() external view returns(address);
     function getAuxInfoAddress() external view returns(address);

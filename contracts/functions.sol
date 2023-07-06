@@ -25,6 +25,23 @@ library functions {
         }
         return sum;
     }
+
+    function listDiff(uint256[] memory list1, uint256[] memory list2) internal pure returns (uint256[] memory){
+        uint256[] memory diff = new uint256[](list1.length);
+        for (uint256 i = 0; i < list1.length; i++) {
+            diff[i] = list1[i] - list2[i];
+        }
+        return diff;
+    }
+
+    function listAdd(uint256[] memory list1, uint256[] memory list2) internal pure returns (uint256[] memory){
+        uint256[] memory sum = new uint256[](list1.length);
+        for (uint256 i = 0; i < list1.length; i++) {
+            sum[i] = list1[i] + list2[i];
+        }
+        return sum;
+    }
+
     function indexOfGreatest(uint256[] memory list) internal pure returns (uint256 greatestIndex, uint256 greatest){
         greatest = 0;
         greatestIndex = 0;
